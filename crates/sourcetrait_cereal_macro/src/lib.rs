@@ -3,6 +3,10 @@ use proc_macro2;
 use quote::quote;
 use syn::{self, parse::Parser};
 
+mod bitcoded;
+mod rkyved;
+mod shared;
+
 #[proc_macro_attribute]
 pub fn derived(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let attr = proc_macro2::TokenStream::from(attr);
@@ -12,11 +16,14 @@ pub fn derived(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> 
         Err(err) => proc_macro::TokenStream::from(err.to_compile_error())
     }
 }
-
-fn make_derives(_target: &syn::Path, _target_generics: &syn::Generics, cereal_attr: &CerealAttr) -> syn::Result<proc_macro2::TokenStream> {
-    let derive_bitcode = match cereal_attr.bitcode.derive {
-        true => Some(quote! { ::bitcode::Encode, ::bitcode::Decode, }),
-        false => None,
+fn make_derives(cereal_attr: &CerealAttr, recursive: bool) -> syn::Result<proc_macro2::TokenStream> {
+    // bitcode's derive generates a coder struct that structurally mirrors the type, so a
+    // self-referential type yields an infinitely-sized coder ("reached the recursion limit
+    // finding the struct tail"). For recursive types the Encode/Decode impls are emitted by
+    // `bitcoded::make_recursive_impls` instead of being derived.
+    let derive_bitcode = match (cereal_attr.bitcode.derive, recursive) {
+        (true, false) => Some(quote! { ::bitcode::Encode, ::bitcode::Decode, }),
+        _ => None,
     };
     let derive_debug = match cereal_attr.debug.derive {
         true => Some(quote! { ::std::fmt::Debug, }),
@@ -67,66 +74,50 @@ fn make_derives(_target: &syn::Path, _target_generics: &syn::Generics, cereal_at
     
     Ok(output)
 }
-
-fn make_imps(target: &syn::Path, target_generics: &syn::Generics, cereal_attr: &CerealAttr) -> syn::Result<proc_macro2::TokenStream> {
-    let (impl_generics, type_generics, where_clause) = target_generics.split_for_impl();
-    
-    let data_imp = match cereal_attr.conforms_data_trait() {
-        false => None,
-        true => Some(quote! {
-            impl #impl_generics ::sourcetrait_cereal::Data for #target #type_generics #where_clause {}
-        }),
-    };
-    
-    let data_copy_imp = match cereal_attr.conforms_data_copy_trait() {
-        false => None,
-        true => Some(quote! {
-            impl #impl_generics ::sourcetrait_cereal::DataCopy for #target #type_generics #where_clause {}
-        }),
-    };
-    
-    let data_eq_imp = match cereal_attr.conforms_data_eq_trait() {
-        false => None,
-        true => Some(quote! {
-            impl #impl_generics ::sourcetrait_cereal::DataEq for #target #type_generics #where_clause {}
-        }),
-    };
-    
-    let data_copy_eq_imp = match cereal_attr.conforms_data_copy_eq_trait() {
-        false => None,
-        true => Some(quote! {
-            impl #impl_generics ::sourcetrait_cereal::DataCopyEq for #target #type_generics #where_clause {}
-        }),
-    };
-    
-    Ok(quote! {
-        #data_imp
-        #data_copy_imp
-        #data_eq_imp
-        #data_copy_eq_imp
-    })
-}
-
 fn parse_derived(attr: proc_macro2::TokenStream, item: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
-    let item = syn::parse2::<syn::DeriveInput>(item)?;
+    let mut item = syn::parse2::<syn::DeriveInput>(item)?;
     let cereal_attr = parse_attr(attr)?;
-    let target = syn::Path::from(item.ident.clone());
-    let target_generics = &item.generics;
-    let derives = make_derives(&target, target_generics, &cereal_attr)?;
-    let imps = make_imps(&target, target_generics, &cereal_attr)?;
+    // `Recursive` / `not(Recursive)` override; otherwise detect direct self-reference syntactically.
+    // Indirect cycles (A -> B -> A) need `Recursive` on one type of the cycle: the indirection is
+    // type-level, so one is enough. A missed cycle is a compile error, never wrong bytes.
+    let recursive = cereal_attr.recursive.unwrap_or_else(|| shared::detect_self_reference(&item));
+    
+    let derives = make_derives(&cereal_attr, recursive)?;
+    // rkyv: replace perfect-derive field bounds (which cycle on recursive types) with
+    // parameter/serializer bounds. Item attrs must follow the #[derive] that introduces `rkyv`.
+    let rkyv_attrs = match cereal_attr.rkyv.derive {
+        true => rkyved::make_item_attrs(&item.generics),
+        false => quote! {},
+    };
+    if cereal_attr.rkyv.derive {
+        rkyved::add_omit_bounds(&mut item);
+    }
+    
+    if let Some(bad) = shared::direct_self_fields(&item).into_iter().next() {
+        return Err(syn::Error::new_spanned(
+            bad,
+            format!(
+                "cereal: self-referential type usage: `{}`. possibly use `Box<{}>`",
+                item.ident, item.ident,
+            ),
+        ));
+    }
+    
+    let bitcode_recursive = match cereal_attr.bitcode.derive && recursive {
+        true => bitcoded::make_recursive_impls(&item)?,
+        false => quote! {},
+    };
     
     Ok(quote! {
         #derives
+        #rkyv_attrs
         #item
-        #imps
+        #bitcode_recursive
     })
 }
-
 struct CerealAttr {
-    impl_data: bool,
-    impl_data_copy: bool,
-    impl_data_eq: bool,
-    impl_data_copy_eq: bool,
+    /// `Some(true)` = `Recursive`, `Some(false)` = `not(Recursive)`, `None` = auto-detect.
+    recursive: Option<bool>,
     bitcode: AttrOpt,
     clone: AttrOpt,
     copy: AttrOpt,
@@ -137,61 +128,27 @@ struct CerealAttr {
     rkyv: AttrOpt,
     serde: AttrOpt,
 }
-
-impl CerealAttr {
-    fn conforms_data_trait(&self) -> bool {
-        self.impl_data
-        && self.clone.is && self.debug.is && self.partial_eq.is
-        && self.hash.is && self.rkyv.is && self.serde.is && self.bitcode.is
-    }
-    
-    fn conforms_data_eq_trait(&self) -> bool {
-        self.impl_data_eq
-        && self.conforms_data_trait()
-        && self.eq.is
-    }
-    
-    fn conforms_data_copy_trait(&self) -> bool {
-        self.impl_data_copy
-        && self.conforms_data_trait()
-        && self.copy.is
-    }
-    
-    fn conforms_data_copy_eq_trait(&self) -> bool {
-        self.impl_data_copy_eq
-        && self.conforms_data_eq_trait()
-        && self.copy.is
-    }
-}
-
 struct AttrOpt {
-    is: bool,
     derive: bool,
 }
-
 impl AttrOpt {
-    const DERIVE: Self = Self { is: true, derive: true };
-    const NOT: Self = Self { is: false, derive: false };
+    const DERIVE: Self = Self { derive: true };
+    const NOT: Self = Self { derive: false };
 }
-
 impl CerealAttr {
     const DEFAULT: Self = Self {
-        impl_data: false,
-        impl_data_copy: false,
-        impl_data_eq: false,
-        impl_data_copy_eq: false,
+        recursive: None,
         bitcode: AttrOpt::DERIVE,
         clone: AttrOpt::DERIVE,
         copy: AttrOpt::NOT,
         debug: AttrOpt::DERIVE,
-        hash: AttrOpt::DERIVE,
+        hash: AttrOpt::NOT,
         partial_eq: AttrOpt::DERIVE,
         eq: AttrOpt::NOT,
         rkyv: AttrOpt::DERIVE,
         serde: AttrOpt::DERIVE,
     };
 }
-
 fn parse_attr(attrs: proc_macro2::TokenStream) -> syn::Result<CerealAttr> {
     const HAS: &'static str = "has";
     const NOT: &'static str = "not";
@@ -246,6 +203,8 @@ fn parse_attr(attrs: proc_macro2::TokenStream) -> syn::Result<CerealAttr> {
                     cereal_attrs.serde = AttrOpt::NOT;
                 } else if ident_not == "Bitcode" {
                     cereal_attrs.bitcode = AttrOpt::NOT;
+                } else if ident_not == "Recursive" {
+                    cereal_attrs.recursive = Some(false);
                 } else {
                     return Err(meta_not.error("unknown cereal attribute"));
                 }
@@ -254,13 +213,14 @@ fn parse_attr(attrs: proc_macro2::TokenStream) -> syn::Result<CerealAttr> {
             })?;
         } else if ident == "Eq" {
             cereal_attrs.eq = AttrOpt::DERIVE;
+        } else if ident == "Hash" {
+            cereal_attrs.hash = AttrOpt::DERIVE;
         } else if ident == "Copy" {
             cereal_attrs.copy = AttrOpt::DERIVE;
+        } else if ident == "Recursive" {
+            cereal_attrs.recursive = Some(true);
         } else if ident == "Data" {
-            cereal_attrs.impl_data = true;
-            cereal_attrs.impl_data_copy = true;
-            cereal_attrs.impl_data_eq = true;
-            cereal_attrs.impl_data_copy_eq = true;
+            // Marker traits are blanket-implemented in the runtime crate; nothing to emit.
         } else {
             return Err(syn::Error::new_spanned(ident, "unknown cereal attribute"));
         }
@@ -268,7 +228,6 @@ fn parse_attr(attrs: proc_macro2::TokenStream) -> syn::Result<CerealAttr> {
     
     Ok(cereal_attrs)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +268,75 @@ mod tests {
         let attr = quote! { not(Debug, Serde) };
         
         parse_derived(attr, item).unwrap();
+    }
+    
+    #[test]
+    fn test_non_recursive_derives_bitcode() {
+        let item = quote! {
+            struct TestStruct {
+                foo: bool,
+            }
+        };
+        let out = parse_derived(quote! { Data }, item).unwrap().to_string();
+        assert!(out.contains(":: serde :: Deserialize , :: bitcode :: Encode , :: bitcode :: Decode , :: rkyv :: Archive"), "{out}");
+        assert!(!out.contains("LazyEncoder"), "{out}");
+        assert!(out.contains("omit_bounds"), "{out}");
+        assert!(out.contains("serialize_bounds"), "{out}");
+    }
+    
+    #[test]
+    fn test_recursive_enum_detected() {
+        let item = quote! {
+            pub enum MyData {
+                Bool(bool),
+                Vector(Vec<MyData>),
+            }
+        };
+        let out = parse_derived(quote! { Data }, item).unwrap().to_string();
+        // bitcode is not in the item's derive list (serde is directly followed by rkyv);
+        // the mirrors carry their own #[derive(::bitcode::Encode/Decode)].
+        assert!(out.contains(":: serde :: Deserialize , :: rkyv :: Archive"), "{out}");
+        assert!(out.contains("LazyEncoder"), "{out}");
+        assert!(out.contains("LazyDecoder"), "{out}");
+        assert!(out.contains("__CerealBitcodeEncMyData"), "{out}");
+        assert!(out.contains("__CerealBitcodeDecMyData"), "{out}");
+    }
+    
+    #[test]
+    fn test_recursive_via_self() {
+        let item = quote! {
+            struct List {
+                head: u32,
+                tail: Option<Box<Self>>,
+            }
+        };
+        let out = parse_derived(quote! { Data }, item).unwrap().to_string();
+        assert!(out.contains("LazyEncoder"), "{out}");
+        // `Self` in the mirrors must name the real type, not the mirror.
+        assert!(out.contains("Option < Box < List > >"), "{out}");
+    }
+    
+    #[test]
+    fn test_recursive_explicit_and_negated() {
+        let item = quote! {
+            struct A { b: Vec<B> }
+        };
+        let out = parse_derived(quote! { Data, Recursive }, item.clone()).unwrap().to_string();
+        assert!(out.contains("LazyEncoder"), "{out}");
+        let out = parse_derived(quote! { Data, not(Recursive) }, item).unwrap().to_string();
+        assert!(!out.contains("LazyEncoder"), "{out}");
+    }
+    
+    #[test]
+    fn test_recursive_generic_struct() {
+        let item = quote! {
+            struct Tree<T> {
+                value: T,
+                children: Vec<Tree<T>>,
+            }
+        };
+        let out = parse_derived(quote! { Data }, item).unwrap().to_string();
+        assert!(out.contains("T : :: bitcode :: Encode"), "{out}");
+        assert!(out.contains("T : :: bitcode :: Decode < '__de >"), "{out}");
     }
 }

@@ -8,9 +8,7 @@ pub mod agnostic {
 #[cfg(feature = "cereal")]
 pub mod cereal {
     pub use sourcetrait_cereal::*;
-    pub mod macros {
-        pub use sourcetrait_cereal_macro::*;
-    }
+    pub use sourcetrait_cereal_macro::*;
 }
 #[cfg(feature = "chronox")]
 pub mod chronox {
@@ -19,6 +17,10 @@ pub mod chronox {
 #[cfg(feature = "clapx")]
 pub mod clapx {
     pub use sourcetrait_clapx::*;
+}
+#[cfg(feature = "datum")]
+pub mod datum {
+    pub use sourcetrait_datum::*;
 }
 #[cfg(feature = "dotrepo")]
 pub mod dotrepo {
@@ -39,9 +41,9 @@ pub mod ronx {
 pub mod stdx {
     pub use sourcetrait_stdx::*;
 }
-#[cfg(feature = "sysgreen")]
-pub mod sysgreen {
-    pub use sourcetrait_sysgreen::*;
+#[cfg(feature = "subsys")]
+pub mod subsys {
+    pub use sourcetrait_subsys::*;
 }
 #[cfg(feature = "testing")]
 pub mod testing {
@@ -76,8 +78,8 @@ pub mod prelude {
     pub use sourcetrait_ronx::prelude::*;
     #[cfg(feature = "stdx")]
     pub use sourcetrait_stdx::*;
-    #[cfg(feature = "sysgreen")]
-    pub use sourcetrait_sysgreen::prelude::*;
+    #[cfg(feature = "subsys")]
+    pub use sourcetrait_subsys::prelude::*;
     #[cfg(feature = "testing")]
     pub use sourcetrait_testing::prelude::*;
     #[cfg(feature = "tomlx")]

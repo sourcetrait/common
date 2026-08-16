@@ -22,11 +22,11 @@ sourcetrait_agnostic_bridge.workspace = true
 sourcetrait_twostr.workspace          = true
 
 [target.'cfg(target_family = "unix")'.dependencies]
-sourcetrait_agnostic_unix = { path = "../../../sourcetrait_common_mono/unix/crates/sourcetrait_agnostic_unix", version = ">=0.0.0-0" }
+sourcetrait_agnostic_unix = { path = "../../../common_mono/unix/crates/sourcetrait_agnostic_unix", version = ">=0.0.0-0" }
 [target.'cfg(target_os = "linux")'.dependencies]
-sourcetrait_agnostic_linux = { path = "../../../sourcetrait_common_mono/linux/crates/sourcetrait_agnostic_linux", version = ">=0.0.0-0"  }
+sourcetrait_agnostic_linux = { path = "../../../common_mono/linux/crates/sourcetrait_agnostic_linux", version = ">=0.0.0-0"  }
 [target.'cfg(target_os = "macos")'.dependencies]
-sourcetrait_agnostic_macos = { path = "../../../sourcetrait_common_mono/macos/crates/sourcetrait_agnostic_macos", version = ">=0.0.0-0"  }
+sourcetrait_agnostic_macos = { path = "../../../common_mono/macos/crates/sourcetrait_agnostic_macos", version = ">=0.0.0-0"  }
 #[target.'cfg(target_os = "windows")'.dependencies]
 #sourcetrait_agnostic_windows = { path = "../../../sourcetrait_common_mono/windows/crates/sourcetrait_agnostic_windows", version = ">=0.0.0-0"  }
 

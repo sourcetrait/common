@@ -231,18 +231,18 @@ impl<'module, 'func, H> TestBuilderWith<'module, 'func, H> {
         Self { inner, harness }
     }
     
-    pub fn using_fixture_dir(mut self) -> Self {
-        self.inner = self.inner.using_fixture_dir();
-        self
-    }
-    
     pub fn using_temp_dir(mut self) -> Self {
-        self.inner = self.inner.using_fixture_dir();
+        self.inner = self.inner.using_temp_dir();
         self
     }
     
     pub fn inherit_temp_dir(mut self) -> Self {
-        self.inner = self.inner.inherit_fixture_dir();
+        self.inner = self.inner.inherit_temp_dir();
+        self
+    }
+    
+    pub fn using_fixture_dir(mut self) -> Self {
+        self.inner = self.inner.using_fixture_dir();
         self
     }
     

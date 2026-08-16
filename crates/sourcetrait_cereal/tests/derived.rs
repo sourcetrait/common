@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use sourcetrait_cereal as cereal;
+    use sourcetrait_cereal as cereal_lib;
+    use sourcetrait_cereal_macro as cereal;
     
     #[test]
     fn test_derive_default() {
@@ -65,7 +66,7 @@ mod tests {
         let a = TestData { a: 10 };
         let b = TestData { a: 10 };
         
-        fn assert_eq_data<T: cereal::Data>(a: &T, b: &T) { assert_eq!(a, b) }
+        fn assert_eq_data<T: cereal_lib::Data>(a: &T, b: &T) { assert_eq!(a, b) }
         assert_eq_data(&a, &b);
     }
 }

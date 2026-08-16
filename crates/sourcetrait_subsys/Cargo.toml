@@ -1,0 +1,33 @@
+[package]
+name = "sourcetrait_subsys"
+description = "Subsystem framework"
+version.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+edition.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+categories.workspace = true
+keywords.workspace   = true
+
+[dependencies]
+bitcode.workspace = true
+rkyv.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+snafu.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+zerocopy.workspace = true
+
+sourcetrait_cereal.workspace = true
+sourcetrait_cereal_macro.workspace = true
+sourcetrait_agnostic.workspace = true
+
+[dev-dependencies]
+sourcetrait_testing.workspace = true
+sourcetrait_tomlx.workspace = true
+
+[[example]]
+name = "basic"
+test = true

@@ -1,0 +1,22 @@
+[package]
+name = "sourcetrait_datum"
+description = "Common SourceTrait data types and tranformations"
+version.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+edition.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+categories.workspace = true
+keywords.workspace   = true
+
+[dependencies]
+bitcode.workspace   = true
+rkyv.workspace      = true
+serde.workspace     = true
+
+sourcetrait_cereal.workspace = true
+sourcetrait_cereal_macro.workspace = true
+
+[dev-dependencies]
+sourcetrait_testing.workspace = true

@@ -8,12 +8,14 @@ members = [
     "crates/sourcetrait_chronox",
     "crates/sourcetrait_clapx",
     "crates/sourcetrait_common",
+    "crates/sourcetrait_datum",
     "crates/sourcetrait_dotrepo",
     "crates/sourcetrait_gitparity",
+    "crates/sourcetrait_osable",
     "crates/sourcetrait_ronx",
     "crates/sourcetrait_ronx_macro",
     "crates/sourcetrait_stdx",
-    "crates/sourcetrait_sysgreen",
+    "crates/sourcetrait_subsys",
     "crates/sourcetrait_tomlx",
     "crates/sourcetrait_tooling",
     "crates/sourcetrait_testing",
@@ -24,11 +26,11 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.0-2"
+version = "0.0.0-3"
 edition = "2024"
 authors = ["SourceTrait <development@sourcetrait.com"]
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/sourcetrait/sourcetrait_common"
+repository = "https://github.com/sourcetrait/common"
 homepage = "https://sourcetrait.com"
 categories = []
 keywords = ["sourcetrait", "common"]
@@ -72,29 +74,31 @@ syn = { version = "2", features=["full"] }
 thiserror = "2"
 tar = "0.4"
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
 toml = "0.8"
 uzers = "0.12"
 walkdir = "2.5"
 widestring = "1"
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
+xxhash-rust = { version = "0.8", features = ["xxh3", "const_xxh3"] }
 zerocopy = { version = "0.8", features = ["derive"] }
 
 
-sourcetrait_agnostic        = { path = "crates/sourcetrait_agnostic",           version = "=0.0.0-2" }
-sourcetrait_agnostic_bridge = { path = "crates/sourcetrait_agnostic_bridge",    version = "=0.0.0-2" }
-sourcetrait_cereal          = { path = "crates/sourcetrait_cereal",             version = "=0.0.0-2" }
-sourcetrait_cereal_macro    = { path = "crates/sourcetrait_cereal_macro",       version = "=0.0.0-2" }
-sourcetrait_chronox         = { path = "crates/sourcetrait_chronox",            version = "=0.0.0-2" }
-sourcetrait_clapx           = { path = "crates/sourcetrait_clapx",              version = "=0.0.0-2" }
-sourcetrait_dotrepo         = { path = "crates/sourcetrait_dotrepo",            version = "=0.0.0-2" }
-sourcetrait_gitparity       = { path = "crates/sourcetrait_gitparity",          version = "=0.0.0-2" }
-sourcetrait_ronx            = { path = "crates/sourcetrait_ronx",               version = "=0.0.0-2" }
-sourcetrait_ronx_macro      = { path = "crates/sourcetrait_ronx_macro",         version = "=0.0.0-2" }
-sourcetrait_stdx            = { path = "crates/sourcetrait_stdx",               version = "=0.0.0-2" }
-sourcetrait_sysgreen        = { path = "crates/sourcetrait_sysgreen",           version = "=0.0.0-2" }
-sourcetrait_testing         = { path = "crates/sourcetrait_testing",            version = "=0.0.0-2" }
-sourcetrait_testing_macro   = { path = "crates/sourcetrait_testing_macro",      version = "=0.0.0-2" }
-sourcetrait_tomlx           = { path = "crates/sourcetrait_tomlx",              version = "=0.0.0-2" }
-sourcetrait_tooling         = { path = "crates/sourcetrait_tooling",            version = "=0.0.0-2" }
-sourcetrait_twostr          = { path = "crates/sourcetrait_twostr",             version = "=0.0.0-2" }
-
+sourcetrait_agnostic        = { path = "crates/sourcetrait_agnostic",           version = ">=0.0.0-0" }
+sourcetrait_agnostic_bridge = { path = "crates/sourcetrait_agnostic_bridge",    version = ">=0.0.0-0" }
+sourcetrait_cereal          = { path = "crates/sourcetrait_cereal",             version = ">=0.0.0-0" }
+sourcetrait_cereal_macro    = { path = "crates/sourcetrait_cereal_macro",       version = ">=0.0.0-0" }
+sourcetrait_chronox         = { path = "crates/sourcetrait_chronox",            version = ">=0.0.0-0" }
+sourcetrait_clapx           = { path = "crates/sourcetrait_clapx",              version = ">=0.0.0-0" }
+sourcetrait_datum           = { path = "crates/sourcetrait_datum",              version = ">=0.0.0-0" }
+sourcetrait_dotrepo         = { path = "crates/sourcetrait_dotrepo",            version = ">=0.0.0-0" }
+sourcetrait_gitparity       = { path = "crates/sourcetrait_gitparity",          version = ">=0.0.0-0" }
+sourcetrait_osable          = { path = "crates/sourcetrait_osable",             version = ">=0.0.0-0" }
+sourcetrait_ronx            = { path = "crates/sourcetrait_ronx",               version = ">=0.0.0-0" }
+sourcetrait_ronx_macro      = { path = "crates/sourcetrait_ronx_macro",         version = ">=0.0.0-0" }
+sourcetrait_stdx            = { path = "crates/sourcetrait_stdx",               version = ">=0.0.0-0" }
+sourcetrait_subsys          = { path = "crates/sourcetrait_subsys",             version = ">=0.0.0-0" }
+sourcetrait_testing         = { path = "crates/sourcetrait_testing",            version = ">=0.0.0-0" }
+sourcetrait_testing_macro   = { path = "crates/sourcetrait_testing_macro",      version = ">=0.0.0-0" }
+sourcetrait_tomlx           = { path = "crates/sourcetrait_tomlx",              version = ">=0.0.0-0" }
+sourcetrait_tooling         = { path = "crates/sourcetrait_tooling",            version = ">=0.0.0-0" }
+sourcetrait_twostr          = { path = "crates/sourcetrait_twostr",             version = ">=0.0.0-0" }
