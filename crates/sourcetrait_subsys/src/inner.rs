@@ -15,6 +15,7 @@ impl<SYS: System> InnerSystem<SYS> {
         params: SYS::Params,
     ) -> SubsysResult<Channel<MsgToSys<SYS::ToSys>, MsgFromSys<SYS::FromSys>>> {
         let (channel, external_channel) = InternalChannel::new_pair(SYS::CHANNEL_SIZE);
+        let cancel = channel.cancel.clone();
         let this = Self {
             paths,
             config,
@@ -22,10 +23,10 @@ impl<SYS: System> InnerSystem<SYS> {
             running: true,
             status: Status::NotReady(NotReady::Normal)
         };
-        let sys = SYS::init(this, params).await.unwrap();
+        let sys = SYS::init(this, params).await?;
         let handle = tokio::task::spawn(async move { sys.run().await });
 
-        Ok(Channel::new(external_channel, handle))
+        Ok(Channel::new(external_channel, cancel, handle))
     }
     
     pub async fn prepare_stop(&mut self, halt: bool) -> RunResult {

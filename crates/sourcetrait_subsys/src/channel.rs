@@ -29,8 +29,11 @@ impl<TX,RX> InternalChannel<TX,RX> {
 }
 
 impl<TX,RX> Channel<TX, RX> {
-    pub fn new(tuple: (tkio::mpsc::Sender<TX>, tkio::mpsc::Receiver<RX>), handle: tkio::task::JoinHandle<RunResult>) -> Self {
-        let cancel = tkio::CancellationToken::new();
+    pub fn new(
+        tuple: (tkio::mpsc::Sender<TX>, tkio::mpsc::Receiver<RX>),
+        cancel: tkio::CancellationToken,
+        handle: tkio::task::JoinHandle<RunResult>,
+    ) -> Self {
         Self { tx: tuple.0, rx: tuple.1, cancel, handle }
     }
     
