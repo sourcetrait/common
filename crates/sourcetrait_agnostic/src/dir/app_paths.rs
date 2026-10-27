@@ -97,7 +97,7 @@ impl AppPaths for BasePaths {
     
     fn config_dir(&self) -> PathBuf {
         match &self.0 {
-            Either::A(base) => base.cache_dir().into(),
+            Either::A(base) => base.config_dir().into(),
             Either::B(path) => path.join(CONFIG),
         }
     }
@@ -111,7 +111,7 @@ impl AppPaths for BasePaths {
     
     fn data_dir(&self) -> PathBuf {
         match &self.0 {
-            Either::A(base) => base.cache_dir().into(),
+            Either::A(base) => base.data_dir().into(),
             Either::B(path) => path.join(DATA),
         }
     }
