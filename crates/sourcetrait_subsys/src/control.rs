@@ -10,6 +10,11 @@ pub trait Handler<SYS: System>: 'static + Send {
     fn on_sub(&mut self, _sub: FromSub) -> impl Future<Output = ()> + Send {
         async {}
     }
+
+    /// Handles the system's end when its control asked no stop: it halted itself or failed.
+    fn on_closed(&mut self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 }
 
 pub struct SystemControl<SYS: System>  {
@@ -18,6 +23,7 @@ pub struct SystemControl<SYS: System>  {
     self_handle: tkio::task::JoinHandle<RunResult>,
     cancel: tkio::CancellationToken,
     requests: Arc<Mutex<FxHashMap<u64, tkio::oneshot::Sender<<SYS as System>::FromSys>>>>,
+    stopping: Arc<AtomicBool>,
 }
 
 struct ControlTask<SYS: System, HNDLR: Handler<SYS>> {
@@ -25,6 +31,7 @@ struct ControlTask<SYS: System, HNDLR: Handler<SYS>> {
     handler: HNDLR,
     requests: Arc<Mutex<FxHashMap<u64, tkio::oneshot::Sender<<SYS as System>::FromSys>>>>,
     cancel: tkio::CancellationToken,
+    stopping: Arc<AtomicBool>,
 }
 
 impl<SYS: System, HNDLR: Handler<SYS>> ControlTask<SYS, HNDLR> {
@@ -61,6 +68,9 @@ impl<SYS: System, HNDLR: Handler<SYS>> ControlTask<SYS, HNDLR> {
         };
 
         self.requests.lock().expect("lock").clear();
+        if !self.stopping.load(atomic::Ordering::SeqCst) {
+            self.handler.on_closed().await;
+        }
         result
     }
 }
@@ -80,12 +90,14 @@ impl<SYS: System> SystemControl<SYS> {
 
         let Channel { tx, rx, cancel, handle: sys_handle } = channel;
         let requests = Arc::new(Mutex::new(FxHashMap::default()));
+        let stopping = Arc::new(AtomicBool::new(false));
 
         let task = ControlTask {
             rx,
             handler,
             cancel: cancel.clone(),
             requests: requests.clone(),
+            stopping: stopping.clone(),
         };
 
         let self_handle = tokio::spawn(async move { task.run().await });
@@ -96,6 +108,7 @@ impl<SYS: System> SystemControl<SYS> {
             sys_handle,
             self_handle,
             requests,
+            stopping,
         };
 
         Ok(this)
@@ -135,6 +148,7 @@ impl<SYS: System> SystemControl<SYS> {
 
     /// Stops the system, then waits for it and the control task to end.
     pub async fn stop(self, halt: bool) -> SubsysResult<()> {
+        self.stopping.store(true, atomic::Ordering::SeqCst);
         let request = Packet::request(ControlRequest { control: Control::Stop { halt } });
         let _ = self.tx.send(MsgToSys::Sub(ToSub::ControlRequest(request))).await;
         let system = self.sys_handle.await;

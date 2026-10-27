@@ -55,7 +55,7 @@ pub(crate) use std::{
     path::{PathBuf, Path},
     process::ExitCode,
     sync::{
-        atomic::AtomicU64,
+        atomic::{self, AtomicBool, AtomicU64},
         Arc, Mutex, MutexGuard
     },
 };

@@ -64,20 +64,64 @@ async fn a_request_to_a_stopping_system_fails_rather_than_hanging() {
     assert!(answer.is_err(), "a stopped system answers no request");
 }
 
+#[tokio::test]
+async fn a_system_ending_unasked_reaches_its_handler() {
+    let (closed, mut heard) = tokio::sync::mpsc::unbounded_channel();
+    let control = start_with(Handler { closed: Some(closed) }).await.expect("start");
+    control
+        .send_packet(subsys::Packet::singular(ToEchoSys::Quit))
+        .await
+        .expect("send the quit");
+    tokio::time::timeout(HANG, heard.recv())
+        .await
+        .expect("the handler hears the end rather than hanging")
+        .expect("the end reported");
+}
+
+#[tokio::test]
+async fn a_stop_its_control_asked_is_no_close() {
+    let (closed, mut heard) = tokio::sync::mpsc::unbounded_channel();
+    let control = start_with(Handler { closed: Some(closed) }).await.expect("start");
+    tokio::time::timeout(HANG, control.stop(true))
+        .await
+        .expect("the halt ends rather than hanging")
+        .expect("the system and its control task end cleanly");
+    assert!(heard.try_recv().is_err(), "an asked stop is reported to no handler");
+}
+
 async fn start(fail_init: bool) -> subsys::SubsysResult<subsys::SystemControl<EchoSys>> {
     subsys::SystemControl::start(
         EchoSysPaths::default(),
         EchoSysConfig::default(),
         EchoSysParams { fail_init },
-        Handler,
+        Handler { closed: None },
     ).await
 }
 
-struct Handler;
+async fn start_with(handler: Handler) -> subsys::SubsysResult<subsys::SystemControl<EchoSys>> {
+    subsys::SystemControl::start(
+        EchoSysPaths::default(),
+        EchoSysConfig::default(),
+        EchoSysParams { fail_init: false },
+        handler,
+    ).await
+}
+
+/// The test's handler: unclaimed packets handed back, an unasked end reported.
+struct Handler {
+    closed: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+}
 
 impl subsys::Handler<EchoSys> for Handler {
     fn on_packet(&mut self, pkt: subsys::Packet<FromEchoSys>) -> impl Future<Output = Option<subsys::Packet<FromEchoSys>>> + 'static + Send {
         async move { Some(pkt) }
+    }
+
+    fn on_closed(&mut self) -> impl Future<Output = ()> + Send {
+        if let Some(closed) = &self.closed {
+            let _ = closed.send(());
+        }
+        async {}
     }
 }
 
@@ -99,6 +143,8 @@ pub struct EchoResponse {
 #[cereal::derived(Copy, Eq, Data)]
 pub enum ToEchoSys {
     Echo(EchoRequest),
+    /// Ends the system on its own, no stop asked of its control.
+    Quit,
 }
 
 #[cereal::derived(Copy, Eq, Data)]
@@ -166,7 +212,10 @@ impl subsys::System for EchoSys {
     }
 
     async fn on_channel_recv(&mut self, pkt: subsys::Packet<ToEchoSys>) -> subsys::FlowResult<Self::Flow> {
-        let ToEchoSys::Echo(req) = *pkt.msg();
+        let req = match *pkt.msg() {
+            ToEchoSys::Echo(req) => req,
+            ToEchoSys::Quit => return Ok(subsys::Flow::Control(subsys::Control::Stop { halt: true })),
+        };
         tokio::time::sleep(Duration::from_millis(req.delay_ms)).await;
         self.send_channel_packet(pkt.respond(FromEchoSys::Echo(EchoResponse { value: req.value })))
             .await?;
