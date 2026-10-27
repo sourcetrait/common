@@ -67,7 +67,7 @@ async fn a_request_to_a_stopping_system_fails_rather_than_hanging() {
 #[tokio::test]
 async fn a_system_ending_unasked_reaches_its_handler() {
     let (closed, mut heard) = tokio::sync::mpsc::unbounded_channel();
-    let control = start_with(Handler { closed: Some(closed) }).await.expect("start");
+    let control = start_with(Handler { closed: Some(closed), subs: None }).await.expect("start");
     control
         .send_packet(subsys::Packet::singular(ToEchoSys::Quit))
         .await
@@ -81,7 +81,7 @@ async fn a_system_ending_unasked_reaches_its_handler() {
 #[tokio::test]
 async fn a_stop_its_control_asked_is_no_close() {
     let (closed, mut heard) = tokio::sync::mpsc::unbounded_channel();
-    let control = start_with(Handler { closed: Some(closed) }).await.expect("start");
+    let control = start_with(Handler { closed: Some(closed), subs: None }).await.expect("start");
     tokio::time::timeout(HANG, control.stop(true))
         .await
         .expect("the halt ends rather than hanging")
@@ -89,12 +89,63 @@ async fn a_stop_its_control_asked_is_no_close() {
     assert!(heard.try_recv().is_err(), "an asked stop is reported to no handler");
 }
 
+#[tokio::test]
+async fn an_unsupported_control_is_refused_and_the_system_serves_on() {
+    let (subs, mut heard) = tokio::sync::mpsc::unbounded_channel();
+    let control = start_with(Handler { closed: None, subs: Some(subs) }).await.expect("start");
+    for kind in [
+        subsys::Control::Drain,
+        subsys::Control::Drop,
+        subsys::Control::Refresh,
+        subsys::Control::Restart,
+    ] {
+        let request = subsys::Packet::request(subsys::ControlRequest { control: kind });
+        let id = request.id;
+        control
+            .send_sysmsg(subsys::MsgToSys::Sub(subsys::ToSub::ControlRequest(request)))
+            .await
+            .expect("send the control");
+        let response = loop {
+            let sub = tokio::time::timeout(HANG, heard.recv())
+                .await
+                .expect("an answer rather than a hang")
+                .expect("the handler hears the answer");
+            if let subsys::FromSub::ControlResponse(pkt) = sub {
+                break pkt;
+            }
+        };
+        assert_eq!(response.response_to_id(), Some(id), "{kind:?} is answered");
+        assert_eq!(response.msg.result, subsys::FAILURE, "{kind:?} is refused");
+    }
+    let echo = tokio::time::timeout(HANG, control.request(EchoRequest { value: 5, delay_ms: 0 }))
+        .await
+        .expect("the system serves on rather than hanging")
+        .expect("the echo succeeds");
+    assert_eq!(echo.value, 5);
+    control.stop(false).await.expect("stop");
+}
+
+#[tokio::test]
+async fn an_envelope_is_dropped_and_the_system_serves_on() {
+    let control = start(false).await.expect("start");
+    control
+        .send_sysmsg(subsys::MsgToSys::Envelope)
+        .await
+        .expect("send the envelope");
+    let echo = tokio::time::timeout(HANG, control.request(EchoRequest { value: 6, delay_ms: 0 }))
+        .await
+        .expect("the system serves on rather than hanging")
+        .expect("the echo succeeds");
+    assert_eq!(echo.value, 6);
+    control.stop(false).await.expect("stop");
+}
+
 async fn start(fail_init: bool) -> subsys::SubsysResult<subsys::SystemControl<EchoSys>> {
     subsys::SystemControl::start(
         EchoSysPaths::default(),
         EchoSysConfig::default(),
         EchoSysParams { fail_init },
-        Handler { closed: None },
+        Handler { closed: None, subs: None },
     ).await
 }
 
@@ -107,14 +158,23 @@ async fn start_with(handler: Handler) -> subsys::SubsysResult<subsys::SystemCont
     ).await
 }
 
-/// The test's handler: unclaimed packets handed back, an unasked end reported.
+/// The test's handler: unclaimed packets handed back, framework messages and an
+/// unasked end reported.
 struct Handler {
     closed: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+    subs: Option<tokio::sync::mpsc::UnboundedSender<subsys::FromSub>>,
 }
 
 impl subsys::Handler<EchoSys> for Handler {
     fn on_packet(&mut self, pkt: subsys::Packet<FromEchoSys>) -> impl Future<Output = Option<subsys::Packet<FromEchoSys>>> + 'static + Send {
         async move { Some(pkt) }
+    }
+
+    fn on_sub(&mut self, sub: subsys::FromSub) -> impl Future<Output = ()> + Send {
+        if let Some(subs) = &self.subs {
+            let _ = subs.send(sub);
+        }
+        async {}
     }
 
     fn on_closed(&mut self) -> impl Future<Output = ()> + Send {

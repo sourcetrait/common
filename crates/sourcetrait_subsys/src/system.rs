@@ -117,7 +117,7 @@ pub trait System: Sized + Send + 'static {
                 MsgToSys::Packet(pkt) => self.on_channel_recv(pkt).await,
                 MsgToSys::Sub(ToSub::ControlRequest(pkt)) => self.handle_control_request(pkt).await,
                 MsgToSys::Sub(ToSub::StatusRequest(pkt)) => self.handle_status_request(pkt).await,
-                MsgToSys::Envelope => todo!("Envelopes are not implemented"),
+                MsgToSys::Envelope => Ok(Flow::Continue),
             }
         }
     }
@@ -181,11 +181,24 @@ pub trait System: Sized + Send + 'static {
             match pkt.msg.control {
                 Control::Resume => self.handle_resume_request(pkt.id).await,
                 Control::Stop {halt} => self.handle_stop_request(pkt.id, halt).await,
-                Control::Drain => todo!(),
-                Control::Drop => todo!(),
-                Control::Refresh => todo!(),
-                Control::Restart => todo!(),
+                Control::Drain | Control::Drop | Control::Refresh | Control::Restart => {
+                    self.handle_unsupported_request(pkt.id).await
+                }
             }
+        }
+    }
+
+    /// Answers a control no system supports yet with a failure, and serves on.
+    fn handle_unsupported_request(&mut self, request_id: MsgID) -> impl Future<Output = FlowResult<Self::Flow>> {
+        async move {
+            self.send_channel(MsgFromSys::Sub(FromSub::ControlResponse(
+                Packet::response(
+                    request_id,
+                    ControlResponse {
+                        result: FAILURE,
+                    },
+                )
+            ))).await.map(|_| Flow::Continue)
         }
     }
     
