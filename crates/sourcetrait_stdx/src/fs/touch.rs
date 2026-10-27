@@ -27,7 +27,7 @@ fn touch_file_impl<C: AsRef<[u8]>>(path: &Path, datetime: Option<DateTime<Utc>>,
         .open(path)?;
     
     if let Some(contents) = contents {
-        file.write(contents.as_ref())?;
+        file.write_all(contents.as_ref())?;
     }
     
     let _ = file.flush();
