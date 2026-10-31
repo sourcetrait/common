@@ -9,6 +9,7 @@ pub(crate) mod msg {
     pub(crate) mod messaging;
     pub(crate) mod status;
 }
+pub(crate) mod request;
 pub(crate) mod status;
 pub(crate) mod sys_io;
 pub(crate) mod system;
@@ -25,6 +26,7 @@ pub use crate::{
         messaging::*,
         status::*,
     },
+    request::{Ask, Requester},
     status::*,
     sys_io::*,
     system::*,
@@ -32,6 +34,7 @@ pub use crate::{
 
 pub mod prelude {
     pub use crate::control::{Handler, Request};
+    pub use crate::request::Ask;
     pub use crate::{
         error::ExitTrait,
         system::System,
@@ -43,6 +46,7 @@ pub(crate) use crate::{
     channel::*,
     config::*,
     error::*,
+    request::{Asked, deliver, unanswered},
     sys_io::*,
     system::*,
 };
@@ -71,7 +75,7 @@ pub(crate) mod tkio {
     pub(crate) use tokio_util::sync::CancellationToken;
     pub(crate) mod oneshot {
         #[allow(unused)]
-        pub(crate) use tokio::sync::oneshot::{Receiver, Sender, channel};
+        pub(crate) use tokio::sync::oneshot::{Receiver, Sender, channel, error};
     }
 }
 

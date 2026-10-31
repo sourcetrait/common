@@ -63,6 +63,9 @@ pub enum SubsysError {
 
     #[snafu(display("Unexpected response"))]
     ResponseType,
+
+    #[snafu(display("The controller left the request unanswered"))]
+    Unanswered,
 }
 
 pub type SubsysResult<T> = Result<T, SubsysError>;

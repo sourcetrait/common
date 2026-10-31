@@ -145,4 +145,6 @@ impl<T> Packet<T> {
 pub enum ToSub {
     ControlRequest(Packet<ControlRequest>),
     StatusRequest(Packet<StatusRequest>),
+    /// A request the system asked that its controller left unanswered.
+    Unanswered(MsgID),
 }

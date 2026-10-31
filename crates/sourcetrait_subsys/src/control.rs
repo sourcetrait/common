@@ -15,6 +15,11 @@ pub trait Handler<SYS: System>: 'static + Send {
     fn on_closed(&mut self) -> impl Future<Output = ()> + Send {
         async {}
     }
+
+    /// Answers a request its system asked; none leaves it unanswered.
+    fn on_request(&mut self, _pkt: Packet<SYS::FromSys>) -> impl Future<Output = Option<SYS::ToSys>> + 'static + Send {
+        async { None }
+    }
 }
 
 pub struct SystemControl<SYS: System>  {
@@ -28,6 +33,8 @@ pub struct SystemControl<SYS: System>  {
 
 struct ControlTask<SYS: System, HNDLR: Handler<SYS>> {
     rx: tkio::mpsc::Receiver<MsgFromSys<<SYS as System>::FromSys>>,
+    /// The system's channel down, held weak so the control's drop still ends it.
+    tx: tkio::mpsc::WeakSender<MsgToSys<<SYS as System>::ToSys>>,
     handler: HNDLR,
     requests: Arc<Mutex<FxHashMap<u64, tkio::oneshot::Sender<<SYS as System>::FromSys>>>>,
     cancel: tkio::CancellationToken,
@@ -48,6 +55,7 @@ impl<SYS: System, HNDLR: Handler<SYS>> ControlTask<SYS, HNDLR> {
                             Some(shotx) => {
                                 let _ = shotx.send(pkt.take_msg());
                             },
+                            None if pkt.is_request() => self.answer(pkt),
                             None => {
                                 let _ = self.handler.on_packet(pkt).await;
                             },
@@ -73,6 +81,26 @@ impl<SYS: System, HNDLR: Handler<SYS>> ControlTask<SYS, HNDLR> {
         }
         result
     }
+
+    /// The system's request answered on a task of its own, which ends with the control.
+    fn answer(&mut self, pkt: Packet<<SYS as System>::FromSys>) {
+        let id = pkt.id;
+        let answer = self.handler.on_request(pkt);
+        let tx = self.tx.clone();
+        let cancel = self.cancel.clone();
+        tokio::spawn(async move {
+            let reply = tokio::select! {
+                _ = cancel.cancelled() => return,
+                answer = answer => match answer {
+                    Some(msg) => MsgToSys::Packet(Packet::response(id, msg)),
+                    None => MsgToSys::Sub(ToSub::Unanswered(id)),
+                },
+            };
+            if let Some(tx) = tx.upgrade() {
+                let _ = tx.send(reply).await;
+            }
+        });
+    }
 }
 
 impl<SYS: System> SystemControl<SYS> {
@@ -94,6 +122,7 @@ impl<SYS: System> SystemControl<SYS> {
 
         let task = ControlTask {
             rx,
+            tx: tx.downgrade(),
             handler,
             cancel: cancel.clone(),
             requests: requests.clone(),

@@ -114,9 +114,16 @@ pub trait System: Sized + Send + 'static {
     fn handle_channel_recv(&mut self, msg: MsgToSys<Self::ToSys>) -> impl Future<Output = FlowResult<Self::Flow>> {
         async move {
             match msg {
-                MsgToSys::Packet(pkt) => self.on_channel_recv(pkt).await,
+                MsgToSys::Packet(pkt) => match deliver(&self.inner().asked, pkt) {
+                    Some(pkt) => self.on_channel_recv(pkt).await,
+                    None => Ok(Flow::Continue),
+                },
                 MsgToSys::Sub(ToSub::ControlRequest(pkt)) => self.handle_control_request(pkt).await,
                 MsgToSys::Sub(ToSub::StatusRequest(pkt)) => self.handle_status_request(pkt).await,
+                MsgToSys::Sub(ToSub::Unanswered(id)) => {
+                    unanswered(&self.inner().asked, id);
+                    Ok(Flow::Continue)
+                }
                 MsgToSys::Envelope => Ok(Flow::Continue),
             }
         }
