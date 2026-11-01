@@ -33,6 +33,4 @@ pub(crate) mod unix {
 pub(crate) mod windows {
     pub(crate) mod twoc_str;
     pub(crate) mod twoc_string;
-    
-    pub(crate) use std::os::windows::ffi::OsStrExt;
 }
