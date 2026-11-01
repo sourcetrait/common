@@ -31,12 +31,7 @@ pub mod platform {
     pub mod macos_platform;
     
     #[cfg(target_os = "windows")]
-    pub mod windows {
-        pub mod consts;
-        pub mod cross;
-        pub mod strings;
-        pub mod winsys;
-    }
+    pub mod windows_platform;
 }
 
 #[allow(unused)]

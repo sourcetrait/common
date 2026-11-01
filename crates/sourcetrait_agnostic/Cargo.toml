@@ -27,8 +27,8 @@ sourcetrait_agnostic_unix = { path = "../../../common_mono/unix/crates/sourcetra
 sourcetrait_agnostic_linux = { path = "../../../common_mono/linux/crates/sourcetrait_agnostic_linux", version = ">=0.0.0-0"  }
 [target.'cfg(target_os = "macos")'.dependencies]
 sourcetrait_agnostic_macos = { path = "../../../common_mono/macos/crates/sourcetrait_agnostic_macos", version = ">=0.0.0-0"  }
-#[target.'cfg(target_os = "windows")'.dependencies]
-#sourcetrait_agnostic_windows = { path = "../../../sourcetrait_common_mono/windows/crates/sourcetrait_agnostic_windows", version = ">=0.0.0-0"  }
+[target.'cfg(target_os = "windows")'.dependencies]
+sourcetrait_agnostic_windows = { path = "../../../common_mono/windows/crates/sourcetrait_agnostic_windows", version = ">=0.0.0-0"  }
 
 [dev-dependencies]
 sourcetrait_testing.workspace = true
