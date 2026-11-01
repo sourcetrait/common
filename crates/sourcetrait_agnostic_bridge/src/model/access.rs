@@ -287,7 +287,7 @@ pub trait UserTrait: HasAccessIdent {
     }
     
     #[cfg(target_family = "windows")]
-    fn sid(&self) -> &StrSID {
+    fn sid(&self) -> BridgeResult<&StrSID> {
         self.ident().windows_sid().ok_into()
     }
 
@@ -329,7 +329,7 @@ pub trait UserGroupTrait: HasAccessIdent {
     }
     
     #[cfg(target_family = "windows")]
-    fn sid(&self) -> &StrSID {
+    fn sid(&self) -> BridgeResult<&StrSID> {
         self.ident().windows_sid().ok_into()
     }
 }
