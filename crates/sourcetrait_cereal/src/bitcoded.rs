@@ -17,8 +17,9 @@
 //!     recurse forever, so this is forced, not a choice.
 //!
 //! This module uses bitcode's `#[doc(hidden)]` coder traits (`bitcode::__private`, defined in
-//! bitcode's `src/derive/mod.rs`, present with the `derive` feature). They are not covered by
-//! bitcode's stability promise: pin `bitcode = "=0.6.9"` and bump deliberately.
+//! bitcode's `src/derive/mod.rs`, present with the `derive` feature). Upstream's stability promise
+//! doesn't cover them; the workspace's `bitcode` is common's own fork,
+//! `sourcetrait_cereal_bitcode`, pinned exactly, so they change only with a change to the fork.
 
 use core::mem::MaybeUninit;
 use core::num::NonZeroUsize;
