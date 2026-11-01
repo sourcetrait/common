@@ -15,7 +15,7 @@ pub(crate) fn build_temp_dir(namepath: &Namepath, base_temp_dir: &Path) -> PathB
             .unwrap();
     }
 
-    temp_dir.canonicalize().unwrap()
+    dunce::canonicalize(&temp_dir).unwrap()
 }
 
 pub(crate) fn build_fixture_dir(namepath: &Namepath) -> PathBuf {
@@ -23,7 +23,7 @@ pub(crate) fn build_fixture_dir(namepath: &Namepath) -> PathBuf {
     let fixture_dir = PathBuf::from(strings::TESTING)
         .join(strings::FIXTURES)
         .join(namepath.path());
-    let fixture_dir = fixture_dir.canonicalize()
+    let fixture_dir = dunce::canonicalize(&fixture_dir)
         .context(format!("Fixture directory does not exist: {} :: Testing Namepath: {}",
             fixture_dir.to_string_lossy(),
             namepath.full_path().to_string_lossy()
@@ -54,7 +54,7 @@ pub(crate) fn create_random_subdir(base_dir: &Path, prefix: &str) -> anyhow::Res
         }
 
         if std::fs::create_dir_all(&random_dir).is_ok() {
-            return Ok(random_dir.canonicalize()?);
+            return Ok(dunce::canonicalize(&random_dir)?);
         }
     }
 

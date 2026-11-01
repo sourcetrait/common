@@ -164,7 +164,7 @@ impl<'func> ModuleBuilder<'func> {
         P: ?Sized + AsRef<OsStr>
     {
         let dir = PathBuf::from(dir);
-        let dir = dir.canonicalize()
+        let dir = dunce::canonicalize(&dir)
             .context(format!("Base temporary directory does not exist: {}", &dir.to_str().unwrap()))
             .unwrap();
 
