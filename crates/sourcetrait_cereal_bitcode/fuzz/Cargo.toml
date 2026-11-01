@@ -1,0 +1,26 @@
+[package]
+name = "sourcetrait_cereal_bitcode_fuzz"
+version = "0.0.0"
+publish = false
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arrayvec = { version = "0.7", features = ["serde"] }
+bitcode = { package = "sourcetrait_cereal_bitcode", path = "..", features = [ "arrayvec", "rust_decimal", "serde", "time" ] }
+libfuzzer-sys = "0.4"
+rust_decimal = "1.36.0"
+serde = { version ="1.0", features = [ "derive" ] }
+time = { version = "0.3", features = ["serde"]}
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz"
+path = "fuzz_targets/fuzz.rs"
+test = false
+doc = false

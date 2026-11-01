@@ -4,6 +4,8 @@ members = [
     "crates/sourcetrait_agnostic",
     "crates/sourcetrait_agnostic_bridge",
     "crates/sourcetrait_cereal",
+    "crates/sourcetrait_cereal_bitcode",
+    "crates/sourcetrait_cereal_bitcode_derive",
     "crates/sourcetrait_cereal_macro",
     "crates/sourcetrait_chronox",
     "crates/sourcetrait_clapx",
@@ -28,7 +30,7 @@ members = [
 [workspace.package]
 version = "0.0.0-3"
 edition = "2024"
-authors = ["SourceTrait <development@sourcetrait.com"]
+authors = ["SourceTrait <development@sourcetrait.com>"]
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/sourcetrait/common"
 homepage = "https://sourcetrait.com"
@@ -37,7 +39,7 @@ keywords = ["sourcetrait", "common"]
 
 [workspace.dependencies]
 anyhow = "1"
-bitcode = "0.6"
+bitcode = { package = "sourcetrait_cereal_bitcode", path = "crates/sourcetrait_cereal_bitcode", version = "=0.0.0-1" }
 chrono = { version = "0.4", default-features = false, features = ["alloc","std","clock","now"] }
 clap = { version = "4.5", features = ["derive"] }
 derive_builder = "0.20"

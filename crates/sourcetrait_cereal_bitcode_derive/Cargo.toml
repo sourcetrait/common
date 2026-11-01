@@ -1,0 +1,18 @@
+[package]
+name = "sourcetrait_cereal_bitcode_derive"
+description = "The derive of sourcetrait_cereal_bitcode's Encode and Decode"
+version = "0.0.0-1"
+edition = "2021"
+rust-version = "1.70"
+authors.workspace = true
+license = "AGPL-3.0-or-later AND MIT"
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0.3", features = [ "extra-traits", "visit-mut" ] }
