@@ -1,5 +1,5 @@
 use crate::budget;
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::derive::{Decode, Encode};
 use crate::length::{LengthDecoder, LengthEncoder};
 use alloc::collections::BTreeMap;
@@ -28,7 +28,7 @@ impl<K: Encode, V: Encode> Default for MapEncoder<K, V> {
     }
 }
 
-impl<K: Encode, V: Encode> Buffer for MapEncoder<K, V> {
+impl<K: Encode, V: Encode> EncoderBuffer for MapEncoder<K, V> {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         self.lengths.collect_into(out);
         self.keys.collect_into(out);
@@ -72,7 +72,7 @@ impl<'a, K: Decode<'a>, V: Decode<'a>> View<'a> for MapDecoder<'a, K, V> {
 macro_rules! encode_body {
     ($t:ty) => {
         #[inline(always)]
-        fn encode(&mut self, map: &$t) {
+        unsafe fn encode(&mut self, map: &$t) {
             let n = map.len();
             self.lengths.encode(&n);
 
@@ -90,7 +90,7 @@ macro_rules! encode_body {
 macro_rules! decode_body {
     ($t:ty) => {
         #[inline(always)]
-        fn decode(&mut self) -> $t {
+        unsafe fn decode(&mut self) -> $t {
             // BTreeMap::from_iter is faster than BTreeMap::insert since it can add the items in
             // bulk once it ensures they are sorted. They are about equivalent for HashMap.
             (0..self.lengths.decode())
@@ -100,21 +100,27 @@ macro_rules! decode_body {
     };
 }
 
-impl<K: Encode, V: Encode> Encoder<BTreeMap<K, V>> for MapEncoder<K, V> {
+unsafe impl<K: Encode, V: Encode> Encoder<BTreeMap<K, V>> for MapEncoder<K, V> {
     encode_body!(BTreeMap<K, V>);
 }
-impl<'a, K: Decode<'a> + Ord, V: Decode<'a>> Decoder<'a, BTreeMap<K, V>> for MapDecoder<'a, K, V> {
+unsafe impl<'a, K: Decode<'a> + Ord, V: Decode<'a>> Decoder<'a, BTreeMap<K, V>>
+    for MapDecoder<'a, K, V>
+{
+    const CACHE_SAFE: bool =
+        <K::Decoder as Decoder<'a, K>>::CACHE_SAFE && <V::Decoder as Decoder<'a, V>>::CACHE_SAFE;
     decode_body!(BTreeMap<K, V>);
 }
 
 #[cfg(feature = "std")]
-impl<K: Encode, V: Encode, S> Encoder<HashMap<K, V, S>> for MapEncoder<K, V> {
+unsafe impl<K: Encode, V: Encode, S> Encoder<HashMap<K, V, S>> for MapEncoder<K, V> {
     encode_body!(HashMap<K, V, S>);
 }
 #[cfg(feature = "std")]
-impl<'a, K: Decode<'a> + Eq + Hash, V: Decode<'a>, S: BuildHasher + Default>
+unsafe impl<'a, K: Decode<'a> + Eq + Hash, V: Decode<'a>, S: BuildHasher + Default>
     Decoder<'a, HashMap<K, V, S>> for MapDecoder<'a, K, V>
 {
+    const CACHE_SAFE: bool =
+        <K::Decoder as Decoder<'a, K>>::CACHE_SAFE && <V::Decoder as Decoder<'a, V>>::CACHE_SAFE;
     decode_body!(HashMap<K, V, S>);
 }
 

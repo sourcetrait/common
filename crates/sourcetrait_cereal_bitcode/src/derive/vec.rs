@@ -1,5 +1,5 @@
 use crate::budget;
-use crate::coder::{Buffer, Decoder, Encoder, Result, View, MAX_VECTORED_CHUNK};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View, MAX_VECTORED_CHUNK};
 use crate::derive::{Decode, Encode};
 use crate::fast::Unaligned;
 use crate::length::{LengthDecoder, LengthEncoder};
@@ -31,7 +31,7 @@ impl<T: Encode> Default for VecEncoder<T> {
     }
 }
 
-impl<T: Encode> Buffer for VecEncoder<T> {
+impl<T: Encode> EncoderBuffer for VecEncoder<T> {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         self.lengths.collect_into(out);
         self.elements.collect_into(out);
@@ -167,9 +167,9 @@ impl<T: Encode> VecEncoder<T> {
     }
 }
 
-impl<T: Encode> Encoder<[T]> for VecEncoder<T> {
+unsafe impl<T: Encode> Encoder<[T]> for VecEncoder<T> {
     #[inline(always)]
-    fn encode(&mut self, v: &[T]) {
+    unsafe fn encode(&mut self, v: &[T]) {
         let n = v.len();
         self.lengths.encode(&n);
 
@@ -190,7 +190,7 @@ impl<T: Encode> Encoder<[T]> for VecEncoder<T> {
     }
 
     #[inline(always)]
-    fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a [T]> + Clone)
+    unsafe fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a [T]> + Clone)
     where
         [T]: 'a,
     {
@@ -277,12 +277,14 @@ impl<'a, T: Decode<'a>> View<'a> for ListDecoder<'a, T> {
     }
 }
 
-impl<'a, T: Decode<'a>, C> Decoder<'a, C> for ListDecoder<'a, T>
+unsafe impl<'a, T: Decode<'a>, C> Decoder<'a, C> for ListDecoder<'a, T>
 where
     VecDecoder<'a, T>: Decoder<'a, C>,
 {
+    const CACHE_SAFE: bool = <VecDecoder<'a, T> as Decoder<'a, C>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode(&mut self) -> C {
+    unsafe fn decode(&mut self) -> C {
         self.0.decode()
     }
 }
@@ -305,12 +307,14 @@ impl<'a, T: Decode<'a>> View<'a> for SetDecoder<'a, T> {
     }
 }
 
-impl<'a, T: Decode<'a>, C> Decoder<'a, C> for SetDecoder<'a, T>
+unsafe impl<'a, T: Decode<'a>, C> Decoder<'a, C> for SetDecoder<'a, T>
 where
     VecDecoder<'a, T>: Decoder<'a, C>,
 {
+    const CACHE_SAFE: bool = <VecDecoder<'a, T> as Decoder<'a, C>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode(&mut self) -> C {
+    unsafe fn decode(&mut self) -> C {
         self.0.decode()
     }
 }
@@ -318,7 +322,7 @@ where
 macro_rules! encode_body {
     ($t:ty) => {
         #[inline(always)]
-        fn encode(&mut self, v: &$t) {
+        unsafe fn encode(&mut self, v: &$t) {
             let n = v.len();
             self.lengths.encode(&n);
             if let Some(n) = NonZeroUsize::new(n) {
@@ -334,7 +338,7 @@ macro_rules! encode_body {
 macro_rules! encode_body_internal_iteration {
     ($t:ty) => {
         #[inline(always)]
-        fn encode(&mut self, v: &$t) {
+        unsafe fn encode(&mut self, v: &$t) {
             let n = v.len();
             self.lengths.encode(&n);
             if let Some(n) = NonZeroUsize::new(n) {
@@ -347,7 +351,7 @@ macro_rules! encode_body_internal_iteration {
 macro_rules! decode_body {
     ($t:ty) => {
         #[inline(always)]
-        fn decode(&mut self) -> $t {
+        unsafe fn decode(&mut self) -> $t {
             // - BTreeSet::from_iter is faster than BTreeSet::insert (see comment in map.rs).
             // - HashSet is about the same either way.
             // - Vec::from_iter is slower (so it doesn't use this).
@@ -358,23 +362,25 @@ macro_rules! decode_body {
     };
 }
 
-impl<T: Encode> Encoder<Vec<T>> for VecEncoder<T> {
+unsafe impl<T: Encode> Encoder<Vec<T>> for VecEncoder<T> {
     #[inline(always)]
-    fn encode(&mut self, v: &Vec<T>) {
+    unsafe fn encode(&mut self, v: &Vec<T>) {
         self.encode(v.as_slice());
     }
 
     #[inline(always)]
-    fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a Vec<T>> + Clone)
+    unsafe fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a Vec<T>> + Clone)
     where
         Vec<T>: 'a,
     {
         self.encode_vectored(i.map(Vec::as_slice));
     }
 }
-impl<'a, T: Decode<'a>> Decoder<'a, Vec<T>> for VecDecoder<'a, T> {
+unsafe impl<'a, T: Decode<'a>> Decoder<'a, Vec<T>> for VecDecoder<'a, T> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode_in_place(&mut self, out: &mut MaybeUninit<Vec<T>>) {
+    unsafe fn decode_in_place(&mut self, out: &mut MaybeUninit<Vec<T>>) {
         let length = self.lengths.decode();
         // Fast path, avoid memcpy and mutating len.
         if length == 0 {
@@ -401,50 +407,57 @@ impl<'a, T: Decode<'a>> Decoder<'a, Vec<T>> for VecDecoder<'a, T> {
     }
 }
 
-impl<T: Encode> Encoder<BinaryHeap<T>> for VecEncoder<T> {
+unsafe impl<T: Encode> Encoder<BinaryHeap<T>> for VecEncoder<T> {
     encode_body!(BinaryHeap<T>); // When BinaryHeap::as_slice is stable use [T] impl.
 }
-impl<'a, T: Decode<'a> + Ord> Decoder<'a, BinaryHeap<T>> for VecDecoder<'a, T> {
+unsafe impl<'a, T: Decode<'a> + Ord> Decoder<'a, BinaryHeap<T>> for VecDecoder<'a, T> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode(&mut self) -> BinaryHeap<T> {
+    unsafe fn decode(&mut self) -> BinaryHeap<T> {
         let v: Vec<T> = self.decode();
         v.into()
     }
 }
 
-impl<T: Encode> Encoder<BTreeSet<T>> for VecEncoder<T> {
+unsafe impl<T: Encode> Encoder<BTreeSet<T>> for VecEncoder<T> {
     encode_body!(BTreeSet<T>);
 }
-impl<'a, T: Decode<'a> + Ord> Decoder<'a, BTreeSet<T>> for VecDecoder<'a, T> {
+unsafe impl<'a, T: Decode<'a> + Ord> Decoder<'a, BTreeSet<T>> for VecDecoder<'a, T> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
     decode_body!(BTreeSet<T>);
 }
 
 #[cfg(feature = "std")]
-impl<T: Encode, S> Encoder<HashSet<T, S>> for VecEncoder<T> {
+unsafe impl<T: Encode, S> Encoder<HashSet<T, S>> for VecEncoder<T> {
     // Internal iteration is 1.6x faster. Interestingly this does not apply to HashMap<T, ()> which
     // I assume is due to HashSet::iter being implemented with HashMap::keys.
     encode_body_internal_iteration!(HashSet<T, S>);
 }
 #[cfg(feature = "std")]
-impl<'a, T: Decode<'a> + Eq + Hash, S: BuildHasher + Default> Decoder<'a, HashSet<T, S>>
+unsafe impl<'a, T: Decode<'a> + Eq + Hash, S: BuildHasher + Default> Decoder<'a, HashSet<T, S>>
     for VecDecoder<'a, T>
 {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
     decode_body!(HashSet<T, S>);
 }
 
-impl<T: Encode> Encoder<LinkedList<T>> for VecEncoder<T> {
+unsafe impl<T: Encode> Encoder<LinkedList<T>> for VecEncoder<T> {
     encode_body!(LinkedList<T>);
 }
-impl<'a, T: Decode<'a>> Decoder<'a, LinkedList<T>> for VecDecoder<'a, T> {
+unsafe impl<'a, T: Decode<'a>> Decoder<'a, LinkedList<T>> for VecDecoder<'a, T> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
     decode_body!(LinkedList<T>);
 }
 
-impl<T: Encode> Encoder<VecDeque<T>> for VecEncoder<T> {
+unsafe impl<T: Encode> Encoder<VecDeque<T>> for VecEncoder<T> {
     encode_body_internal_iteration!(VecDeque<T>); // Internal iteration is 10x faster.
 }
-impl<'a, T: Decode<'a>> Decoder<'a, VecDeque<T>> for VecDecoder<'a, T> {
+unsafe impl<'a, T: Decode<'a>> Decoder<'a, VecDeque<T>> for VecDecoder<'a, T> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode(&mut self) -> VecDeque<T> {
+    unsafe fn decode(&mut self) -> VecDeque<T> {
         let v: Vec<T> = self.decode();
         v.into()
     }

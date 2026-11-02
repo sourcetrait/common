@@ -61,24 +61,31 @@ impl crate::shared::Item for Item {
 
                     // HACK: Since encoders don't have lifetimes we can't reference <T<'a> as Encode>::Encoder since 'a
                     // does not exist. Instead we replace this with <T<'static> as Encode>::Encoder and transmute it to
-                    // T<'a>. No encoder actually encodes T<'static> any differently from T<'a> so this is sound.
+                    // T<'a>. No encoder actually encodes T<'static> any differently from T<'a> so this is sound: an
+                    // encoder keeps nothing borrowed from a value past the call, as `Encoder`'s implementer
+                    // promises. The transmute sits in the call's unsafe block below.
                     quote! {
-                        unsafe { ::core::mem::transmute::<&#underscore_type, &#static_type>(#field_name) }
+                        ::core::mem::transmute::<&#underscore_type, &#static_type>(#field_name)
                     }
                 } else {
                     quote! { #field_name }
                 };
 
+                // SAFETY of each call: the struct's or the variant's encoder reserved the field's
+                // encoder for its values, as `reserve` forwards it, and `encode_vectored`'s
+                // iterator maps the caller's, its values and size hint the caller's.
                 if matches!(self, Self::EncodeVectored) {
                     quote! {
-                        self.#global_field_name.encode_vectored(i.clone().map(|me| {
-                            let #field_name = &me.#real_field_name;
-                            #value
-                        }));
+                        unsafe {
+                            self.#global_field_name.encode_vectored(i.clone().map(|me| {
+                                let #field_name = &me.#real_field_name;
+                                #value
+                            }))
+                        };
                     }
                 } else {
                     quote! {
-                        self.#global_field_name.encode(#value);
+                        unsafe { self.#global_field_name.encode(#value) };
                     }
                 }
             }
@@ -154,11 +161,14 @@ impl crate::shared::Item for Item {
                                 }
                             })
                             .collect();
+                        // SAFETY: the enum's encoder reserved its variants' encoder for its values.
                         quote! {
                             #[allow(unused_variables, unused_assignments)]
-                            self.variants.encode(&match v {
-                                #variants
-                            });
+                            unsafe {
+                                self.variants.encode(&match v {
+                                    #variants
+                                })
+                            };
                         }
                     })
                     .unwrap_or_default();
@@ -198,9 +208,10 @@ impl crate::shared::Item for Item {
             }
             // This is a copy of Encode::encode_vectored's default impl (which provides no speedup).
             // TODO optimize enum encode_vectored.
+            // SAFETY: the caller made room for each value `i` yields.
             Self::EncodeVectored => quote! {
                 for t in i {
-                    self.encode(t);
+                    unsafe { self.encode(t) };
                 }
             },
             Self::CollectInto => {
@@ -290,24 +301,25 @@ impl crate::shared::Derive<{ Item::COUNT }> for Encode {
                     }
                 }
 
-                impl #impl_generics #private::Encoder<#input_ty> for #encoder_ty #where_clause {
+                // SAFETY: the encoder holds its fields' encoders alone, each keeping nothing borrowed.
+                unsafe impl #impl_generics #private::Encoder<#input_ty> for #encoder_ty #where_clause {
                     #[cfg_attr(not(debug_assertions), inline(always))]
-                    fn encode(&mut self, v: &#input_ty) {
+                    unsafe fn encode(&mut self, v: &#input_ty) {
                         #[allow(unused_imports)]
-                        use #private::Buffer as _;
+                        use #private::EncoderBuffer as _;
                         #encode_body
                     }
 
                     // #[cfg_attr(not(debug_assertions), inline(always))]
                     // #[inline(never)]
-                    fn encode_vectored<'__v>(&mut self, #[allow(unused)] i: impl Iterator<Item = &'__v #input_ty> + Clone) where #input_ty: '__v {
+                    unsafe fn encode_vectored<'__v>(&mut self, #[allow(unused)] i: impl Iterator<Item = &'__v #input_ty> + Clone) where #input_ty: '__v {
                         #[allow(unused_imports)]
-                        use #private::Buffer as _;
+                        use #private::EncoderBuffer as _;
                         #encode_vectored_body
                     }
                 }
 
-                impl #encoder_impl_generics #private::Buffer for #encoder_ty #encoder_where_clause {
+                impl #encoder_impl_generics #private::EncoderBuffer for #encoder_ty #encoder_where_clause {
                     fn collect_into(&mut self, #[allow(unused)] out: &mut #private::Vec<u8>) {
                         #collect_into_body
                     }

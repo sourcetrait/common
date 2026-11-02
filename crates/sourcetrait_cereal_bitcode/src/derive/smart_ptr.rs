@@ -1,5 +1,5 @@
 use crate::budget;
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::derive::{Decode, Encode};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -15,14 +15,14 @@ impl<T: Encode + ?Sized> Default for DerefEncoder<T> {
     }
 }
 
-impl<D: Deref<Target = T>, T: Encode + ?Sized> Encoder<D> for DerefEncoder<T> {
+unsafe impl<D: Deref<Target = T>, T: Encode + ?Sized> Encoder<D> for DerefEncoder<T> {
     #[inline(always)]
-    fn encode(&mut self, t: &D) {
+    unsafe fn encode(&mut self, t: &D) {
         self.0.encode(t);
     }
 }
 
-impl<T: Encode + ?Sized> Buffer for DerefEncoder<T> {
+impl<T: Encode + ?Sized> EncoderBuffer for DerefEncoder<T> {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         self.0.collect_into(out);
     }
@@ -69,9 +69,11 @@ impl<'a, T: Decode<'a>> View<'a> for SharedDecoder<'a, T> {
     }
 }
 
-impl<'a, F: From<T>, T: Decode<'a>> Decoder<'a, F> for SharedDecoder<'a, T> {
+unsafe impl<'a, F: From<T>, T: Decode<'a>> Decoder<'a, F> for SharedDecoder<'a, T> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode(&mut self) -> F {
+    unsafe fn decode(&mut self) -> F {
         F::from(self.0 .0.decode())
     }
 }
@@ -110,16 +112,20 @@ impl<'a, T: Decode<'a> + SharedSlice> View<'a> for SharedSliceDecoder<'a, T> {
     }
 }
 
-impl<'a, F: From<T>, T: Decode<'a> + SharedSlice> Decoder<'a, F> for SharedSliceDecoder<'a, T> {
+unsafe impl<'a, F: From<T>, T: Decode<'a> + SharedSlice> Decoder<'a, F> for SharedSliceDecoder<'a, T> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode(&mut self) -> F {
+    unsafe fn decode(&mut self) -> F {
         F::from(self.0 .0.decode())
     }
 }
 
-impl<'a, F: From<T>, T: Decode<'a>> Decoder<'a, F> for FromDecoder<'a, T> {
+unsafe impl<'a, F: From<T>, T: Decode<'a>> Decoder<'a, F> for FromDecoder<'a, T> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode(&mut self) -> F {
+    unsafe fn decode(&mut self) -> F {
         F::from(self.0.decode())
     }
 }

@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::error::{err, error};
 use crate::fast::{CowSlice, NextUnchecked, VecImpl};
 use crate::int::{IntDecoder, IntEncoder};
@@ -12,9 +12,9 @@ pub struct LengthEncoder {
     large: IntEncoder<usize>,
 }
 
-impl Encoder<usize> for LengthEncoder {
+unsafe impl Encoder<usize> for LengthEncoder {
     #[inline(always)]
-    fn encode(&mut self, &v: &usize) {
+    unsafe fn encode(&mut self, &v: &usize) {
         unsafe {
             let end_ptr = self.small.end_ptr();
             if v < 255 {
@@ -92,13 +92,15 @@ impl LengthEncoder {
     ) {
         for v in i {
             let n = v.len();
-            self.encode(&n);
+            // SAFETY: `VecEncoder::encode_vectored`, this helper's caller, keeps
+            // `Encoder::encode_vectored`'s contract, whose reserve covers a length a slice.
+            unsafe { self.encode(&n) };
             reserve_and_encode_large(v);
         }
     }
 }
 
-impl Buffer for LengthEncoder {
+impl EncoderBuffer for LengthEncoder {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         pack_bytes(self.small.as_mut_slice(), out);
         self.small.clear();
@@ -178,7 +180,9 @@ impl<'a> View<'a> for LengthDecoder<'a> {
         // Summing &[u64] can overflow, so we check it.
         let mut decoder = self.large.borrowed_clone();
         for _ in 0..large_length {
-            let v: usize = decoder.decode();
+            // SAFETY: `self.large` was populated with `large_length` values, which its
+            // borrowed clone decodes once each.
+            let v: usize = unsafe { decoder.decode() };
             sum = sum
                 .checked_add(v as u64)
                 .ok_or_else(|| error("length overflow"))?;
@@ -194,9 +198,11 @@ impl<'a> View<'a> for LengthDecoder<'a> {
 // isize::MAX / (largest type we want to allocate without possibility of overflow)
 const HUGE_LEN: u64 = 0x7FFFFFFF_FFFFFFFF / 4096;
 
-impl<'a> Decoder<'a, usize> for LengthDecoder<'a> {
+unsafe impl<'a> Decoder<'a, usize> for LengthDecoder<'a> {
+    const CACHE_SAFE: bool = true;
+
     #[inline(always)]
-    fn decode(&mut self) -> usize {
+    unsafe fn decode(&mut self) -> usize {
         let length = unsafe {
             let v = self.small.mut_slice().next_unchecked();
 
@@ -223,23 +229,27 @@ impl<'a> Decoder<'a, usize> for LengthDecoder<'a> {
 #[cfg(all(test, feature = "nightly"))]
 mod tests {
     use super::{LengthDecoder, LengthEncoder};
-    use crate::coder::{Buffer, Decoder, Encoder, View};
+    use crate::coder::{Decoder, Encoder, EncoderBuffer, View};
     use core::num::NonZeroUsize;
 
     #[test]
     fn test() {
         let mut encoder = LengthEncoder::default();
         encoder.reserve(NonZeroUsize::new(3).unwrap());
-        encoder.encode(&1);
-        encoder.encode(&255);
-        encoder.encode(&2);
+        unsafe {
+            encoder.encode(&1);
+            encoder.encode(&255);
+            encoder.encode(&2);
+        }
         let bytes = encoder.collect();
 
         let mut decoder = LengthDecoder::default();
         decoder.populate(&mut bytes.as_slice(), 3).unwrap();
-        assert_eq!(decoder.decode(), 1);
-        assert_eq!(decoder.decode(), 255);
-        assert_eq!(decoder.decode(), 2);
+        unsafe {
+            assert_eq!(decoder.decode(), 1);
+            assert_eq!(decoder.decode(), 255);
+            assert_eq!(decoder.decode(), 2);
+        }
     }
 
     #[cfg(target_pointer_width = "64")] // HUGE_LEN > u32::MAX
@@ -248,7 +258,7 @@ mod tests {
         for (x, is_ok) in [(super::HUGE_LEN - 1, true), (super::HUGE_LEN, false)] {
             let mut encoder = LengthEncoder::default();
             encoder.reserve(NonZeroUsize::new(1).unwrap());
-            encoder.encode(&(x as usize));
+            unsafe { encoder.encode(&(x as usize)) };
             let bytes = encoder.collect();
 
             let mut decoder = LengthDecoder::default();

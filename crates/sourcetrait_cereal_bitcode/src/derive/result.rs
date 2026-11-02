@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, View};
 use crate::derive::variant::{VariantDecoder, VariantEncoder};
 use crate::derive::{Decode, Encode};
 use crate::error::Error;
@@ -23,9 +23,9 @@ impl<T: Encode, E: Encode> Default for ResultEncoder<T, E> {
     }
 }
 
-impl<T: Encode, E: Encode> Encoder<Result<T, E>> for ResultEncoder<T, E> {
+unsafe impl<T: Encode, E: Encode> Encoder<Result<T, E>> for ResultEncoder<T, E> {
     #[inline(always)]
-    fn encode(&mut self, t: &Result<T, E>) {
+    unsafe fn encode(&mut self, t: &Result<T, E>) {
         self.variants.encode(&(t.is_err() as u8));
         match t {
             Ok(t) => {
@@ -41,7 +41,7 @@ impl<T: Encode, E: Encode> Encoder<Result<T, E>> for ResultEncoder<T, E> {
     // TODO implement encode_vectored if we can avoid lots of code duplication with OptionEncoder.
 }
 
-impl<T: Encode, E: Encode> Buffer for ResultEncoder<T, E> {
+impl<T: Encode, E: Encode> EncoderBuffer for ResultEncoder<T, E> {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         self.variants.collect_into(out);
         self.ok.collect_into(out);
@@ -79,9 +79,12 @@ impl<'a, T: Decode<'a>, E: Decode<'a>> View<'a> for ResultDecoder<'a, T, E> {
     }
 }
 
-impl<'a, T: Decode<'a>, E: Decode<'a>> Decoder<'a, Result<T, E>> for ResultDecoder<'a, T, E> {
+unsafe impl<'a, T: Decode<'a>, E: Decode<'a>> Decoder<'a, Result<T, E>> for ResultDecoder<'a, T, E> {
+    const CACHE_SAFE: bool =
+        <T::Decoder as Decoder<'a, T>>::CACHE_SAFE && <E::Decoder as Decoder<'a, E>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode_in_place(&mut self, out: &mut MaybeUninit<Result<T, E>>) {
+    unsafe fn decode_in_place(&mut self, out: &mut MaybeUninit<Result<T, E>>) {
         if self.variants.decode() == 0 {
             out.write(Ok(self.ok.decode()));
         } else {

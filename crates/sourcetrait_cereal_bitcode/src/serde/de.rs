@@ -145,7 +145,10 @@ macro_rules! impl_de {
         where
             V: Visitor<'de>,
         {
-            v.$visit(specify!(self, $variant).decode())
+            let d = specify!(self, $variant);
+            // SAFETY: each value's deserializer decodes it once, from a decoder populated with
+            // every value its parent holds.
+            v.$visit(unsafe { d.decode() })
         }
     };
 }
@@ -216,7 +219,8 @@ impl<'de> Deserializer<'de> for DecoderWrapper<'_, 'de> {
         V: Visitor<'de>,
     {
         let (variant_decoder, decoders) = specify!(self, Enum);
-        let variant_index = variant_decoder.decode();
+        // SAFETY: as in `impl_de!`.
+        let variant_index = unsafe { variant_decoder.decode() };
         // Safety: populate guarantees `variant_decoder.max_variant_index() < decoders.len()`.
         let decoder = unsafe { decoders.get_unchecked_mut(variant_index as usize) };
 
@@ -259,7 +263,8 @@ impl<'de> Deserializer<'de> for DecoderWrapper<'_, 'de> {
         V: Visitor<'de>,
     {
         let (length_decoder, decoder) = specify!(self, Seq);
-        let len = length_decoder.decode();
+        // SAFETY: as in `impl_de!`.
+        let len = unsafe { length_decoder.decode() };
 
         struct Access<'a, 'de> {
             wrapper: DecoderWrapper<'a, 'de>,
@@ -396,7 +401,8 @@ impl<'de> Deserializer<'de> for DecoderWrapper<'_, 'de> {
         V: Visitor<'de>,
     {
         let (length_decoder, decoders) = specify!(self, Map);
-        let len = length_decoder.decode();
+        // SAFETY: as in `impl_de!`.
+        let len = unsafe { length_decoder.decode() };
 
         struct Access<'a, 'de> {
             decoders: &'a mut (SerdeDecoder<'de>, SerdeDecoder<'de>),
@@ -522,7 +528,8 @@ impl<'a, 'de> EnumAccess<'de> for DecoderWrapper<'a, 'de> {
         V: DeserializeSeed<'de>,
     {
         let (variant_decoder, decoders) = specify!(self, Enum);
-        let variant_index = variant_decoder.decode();
+        // SAFETY: as in `impl_de!`.
+        let variant_index = unsafe { variant_decoder.decode() };
         // Safety: populate guarantees `variant_decoder.max_variant_index() < decoders.len()`.
         let decoder = unsafe { decoders.get_unchecked_mut(variant_index as usize) };
         let variant_index = variant_index as u32;

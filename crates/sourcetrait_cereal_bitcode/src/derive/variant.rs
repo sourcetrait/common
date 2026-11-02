@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::fast::{CowSlice, NextUnchecked, PushUnchecked, VecImpl};
 use crate::pack::{check_less_than, pack_bytes_less_than, unpack_bytes_less_than};
 use crate::pack_ints::{pack_ints, unpack_ints, Int};
@@ -9,14 +9,14 @@ use core::num::NonZeroUsize;
 #[derive(Default)]
 pub struct VariantEncoder<T: Int, const N: usize>(VecImpl<T>);
 
-impl<T: Int, const N: usize> Encoder<T> for VariantEncoder<T, N> {
+unsafe impl<T: Int, const N: usize> Encoder<T> for VariantEncoder<T, N> {
     #[inline(always)]
-    fn encode(&mut self, v: &T) {
+    unsafe fn encode(&mut self, v: &T) {
         unsafe { self.0.push_unchecked(*v) };
     }
 }
 
-impl<T: Int, const N: usize> Buffer for VariantEncoder<T, N> {
+impl<T: Int, const N: usize> EncoderBuffer for VariantEncoder<T, N> {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         assert!(N >= 2);
         if TypeId::of::<T>() != TypeId::of::<u8>() {
@@ -78,12 +78,14 @@ impl<'a, T: Int + Into<usize>, const N: usize, const HISTOGRAM: usize> View<'a>
     }
 }
 
-impl<'a, T: Int + Into<usize>, const N: usize, const HISTOGRAM: usize> Decoder<'a, T>
+unsafe impl<'a, T: Int + Into<usize>, const N: usize, const HISTOGRAM: usize> Decoder<'a, T>
     for VariantDecoder<'a, T, N, HISTOGRAM>
 {
+    const CACHE_SAFE: bool = true;
+
     // Guaranteed to output numbers less than N.
     #[inline(always)]
-    fn decode(&mut self) -> T {
+    unsafe fn decode(&mut self) -> T {
         T::from_unaligned(unsafe { self.variants.mut_slice().next_unchecked() })
     }
 }

@@ -31,8 +31,10 @@ rand = "0.8.5"
 rand_chacha = "0.3.1"
 serde = { version = "1.0", features = [ "derive" ] }
 
-# zstd doesn't compile with miri big-endian.
+# zstd doesn't compile with miri big-endian. Upstream's crate, for the wire's
+# differential, reads past its short slices, which Miri reports.
 [target.'cfg(not(miri))'.dev-dependencies]
+bitcode_upstream = { package = "bitcode", version = "=0.6.9" }
 zstd = "0.13.0"
 
 [features]

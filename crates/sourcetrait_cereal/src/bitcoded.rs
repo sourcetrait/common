@@ -25,7 +25,7 @@ use core::mem::MaybeUninit;
 use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 
-use ::bitcode::__private::{Buffer, Decoder, Encoder, View};
+use ::bitcode::__private::{Decoder, Encoder, EncoderBuffer, View};
 use ::bitcode::{Decode, Encode, Error};
 
 /// Implemented by `#[cereal::derived]` for recursive types.
@@ -86,7 +86,7 @@ impl<F: ?Sized + Encode> Default for RefEncoder<F> {
     }
 }
 
-impl<F: ?Sized + Encode> Buffer for RefEncoder<F> {
+impl<F: ?Sized + Encode> EncoderBuffer for RefEncoder<F> {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         self.0.collect_into(out);
     }
@@ -95,22 +95,25 @@ impl<F: ?Sized + Encode> Buffer for RefEncoder<F> {
     }
 }
 
-impl<F: ?Sized + Encode> Encoder<Ref<F>> for RefEncoder<F> {
+// SAFETY: `RefEncoder` holds `F`'s encoder alone, which keeps nothing borrowed.
+unsafe impl<F: ?Sized + Encode> Encoder<Ref<F>> for RefEncoder<F> {
     #[inline(always)]
-    fn encode(&mut self, r: &Ref<F>) {
+    unsafe fn encode(&mut self, r: &Ref<F>) {
         // SAFETY: `Ref`s are created by `EncodeMirror::to_enc` under its contract (`LazyEncoder`
-        // consumes them immediately, while the borrowed value is alive and unaliased).
-        self.0.encode(unsafe { r.0.as_ref() });
+        // consumes them immediately, while the borrowed value is alive and unaliased), and the
+        // caller's reserve, which `reserve` forwards, covers the value.
+        unsafe { self.0.encode(r.0.as_ref()) };
     }
 
     #[inline(always)]
-    fn encode_vectored<'v>(&mut self, i: impl Iterator<Item = &'v Ref<F>> + Clone)
+    unsafe fn encode_vectored<'v>(&mut self, i: impl Iterator<Item = &'v Ref<F>> + Clone)
     where
         Ref<F>: 'v,
     {
         // The dereferenced items get a lifetime local to this call, which any `F` outlives, so
-        // this needs no `F: 'v` bound. SAFETY: as in `encode`.
-        self.0.encode_vectored(i.map(|r| unsafe { r.0.as_ref() }));
+        // this needs no `F: 'v` bound. SAFETY: as in `encode`, the mapped iterator yielding the
+        // caller's values and size hint.
+        unsafe { self.0.encode_vectored(i.map(|r| r.0.as_ref())) };
     }
 }
 
@@ -142,7 +145,7 @@ impl<T: EncodeMirror> LazyEncoder<T> {
     }
 }
 
-impl<T: EncodeMirror> Buffer for LazyEncoder<T> {
+impl<T: EncodeMirror> EncoderBuffer for LazyEncoder<T> {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         // `collect_into` clears the inner buffer, so the next cycle starts empty.
         if core::mem::take(&mut self.count) > 0 {
@@ -156,15 +159,20 @@ impl<T: EncodeMirror> Buffer for LazyEncoder<T> {
     }
 }
 
-impl<T: EncodeMirror> Encoder<T> for LazyEncoder<T> {
+// SAFETY: `LazyEncoder` keeps nothing borrowed past an encode: the mirrors, which borrow the
+// value through `Ref`s, are encoded within the call that makes them, by the mirror's encoder,
+// which keeps nothing borrowed.
+unsafe impl<T: EncodeMirror> Encoder<T> for LazyEncoder<T> {
     #[inline(always)]
-    fn encode(&mut self, t: &T) {
+    unsafe fn encode(&mut self, t: &T) {
         self.count += 1;
         let m = t.to_enc();
-        self.inner().encode(&m);
+        // SAFETY: the caller's reserve covers `t`, and `reserve` forwarded it to the inner
+        // encoder.
+        unsafe { self.inner().encode(&m) };
     }
 
-    fn encode_vectored<'a>(&mut self, mut i: impl Iterator<Item = &'a T> + Clone)
+    unsafe fn encode_vectored<'a>(&mut self, mut i: impl Iterator<Item = &'a T> + Clone)
     where
         T: 'a,
     {
@@ -186,10 +194,13 @@ impl<T: EncodeMirror> Encoder<T> for LazyEncoder<T> {
         // SAFETY: `buf[..n]` was initialised above; `T::Enc: Copy`, so nothing needs dropping.
         let mirrors: &[T::Enc] =
             unsafe { core::slice::from_raw_parts(buf.as_ptr().cast::<T::Enc>(), n) };
-        self.inner().encode_vectored(mirrors.iter());
+        // SAFETY: the caller's reserve covers `i`'s values, which `reserve` forwarded, and
+        // `mirrors` yields `n` of them, `1 <= n <= MAX_VECTORED_CHUNK`, as each clone does.
+        unsafe { self.inner().encode_vectored(mirrors.iter()) };
         // Only reached if a caller violated MAX_VECTORED_CHUNK; stays correct either way.
         for t in i {
-            self.encode(t);
+            // SAFETY: as above.
+            unsafe { self.encode(t) };
         }
     }
 }
@@ -222,14 +233,18 @@ impl<'de, T: DecodeMirror<'de>> View<'de> for LazyDecoder<'de, T> {
     }
 }
 
-impl<'de, T: DecodeMirror<'de>> Decoder<'de, T> for LazyDecoder<'de, T> {
+// SAFETY: `decode_in_place` keeps its default, writing `decode`'s value, and `CACHE_SAFE` its
+// default, false.
+unsafe impl<'de, T: DecodeMirror<'de>> Decoder<'de, T> for LazyDecoder<'de, T> {
     #[inline(always)]
-    fn decode(&mut self) -> T {
+    unsafe fn decode(&mut self) -> T {
         // bitcode's contract: `populate(_, length >= 1)` precedes any `decode`, so the box exists.
         let inner = self
             .inner
             .as_mut()
             .expect("LazyDecoder::decode called before populate");
-        T::from_dec(inner.decode())
+        // SAFETY: the caller's populate of `n >= 1` values reached the inner decoder, which
+        // decodes one of them.
+        T::from_dec(unsafe { inner.decode() })
     }
 }

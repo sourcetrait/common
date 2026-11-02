@@ -19,15 +19,18 @@ pub enum Item {
     Populate,
     Decode,
     DecodeInPlace,
+    /// Each field's decoder's `CACHE_SAFE`, joined by `&&` after a leading `true`.
+    CacheSafe,
 }
 
 impl Item {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Type,
         Self::Default,
         Self::Populate,
         // No Self::Decode since it's only used for enum variants, not top level struct/enum.
         Self::DecodeInPlace,
+        Self::CacheSafe,
     ];
     const COUNT: usize = Self::ALL.len();
 }
@@ -42,15 +45,21 @@ impl crate::shared::Item for Item {
         field_type: &Type,
     ) -> TokenStream {
         match self {
-            Self::Type => {
+            Self::Type | Self::CacheSafe => {
                 let mut de_type = replace_lifetimes(field_type, DE_LIFETIME).to_token_stream();
                 if attrs.skip {
                     de_type = quote! { ::core::marker::PhantomData<#de_type> };
                 }
                 let private = &attrs.private;
                 let de = de_lifetime();
-                quote! {
-                    #global_field_name: <#de_type as #private::Decode<#de>>::Decoder,
+                if matches!(self, Self::CacheSafe) {
+                    quote! {
+                        && <<#de_type as #private::Decode<#de>>::Decoder as #private::Decoder<#de, #de_type>>::CACHE_SAFE
+                    }
+                } else {
+                    quote! {
+                        #global_field_name: <#de_type as #private::Decode<#de>>::Decoder,
+                    }
                 }
             }
             Self::Default => quote! {
@@ -60,6 +69,8 @@ impl crate::shared::Item for Item {
                 self.#global_field_name.populate(input, __length)?;
             },
             // Only used by enum variants.
+            // SAFETY of each decode: the enum's decoder populated each variant's fields with
+            // that variant's count, and decodes one field a value of the variant.
             Self::Decode => {
                 let value = if attrs.skip {
                     quote! {
@@ -67,13 +78,16 @@ impl crate::shared::Item for Item {
                     }
                 } else {
                     quote! {
-                        self.#global_field_name.decode()
+                        unsafe { self.#global_field_name.decode() }
                     }
                 };
                 quote! {
                     let #field_name = #value;
                 }
             }
+            // SAFETY: `uninit_field!` names the field by its own type, and its reference is the
+            // field's only one while it lives; the struct's decoder populated each field's
+            // decoder with the struct's count, and decodes one field a value.
             Self::DecodeInPlace => {
                 let de_type = replace_lifetimes(field_type, DE_LIFETIME);
                 let private = &attrs.private;
@@ -82,11 +96,12 @@ impl crate::shared::Item for Item {
                 };
                 if attrs.skip {
                     quote! {{
-                        (#target).write(Default::default());
+                        let __field = unsafe { #target };
+                        __field.write(Default::default());
                     }}
                 } else {
                     quote! {
-                        self.#global_field_name.decode_in_place(#target);
+                        unsafe { self.#global_field_name.decode_in_place(#target) };
                     }
                 }
             }
@@ -190,6 +205,7 @@ impl crate::shared::Item for Item {
                 }
             }
             Self::Decode => unimplemented!(),
+            Self::CacheSafe => (0..variant_count).map(|i| inner(self, i)).collect(),
             Self::DecodeInPlace => {
                 if never {
                     return quote! {
@@ -222,8 +238,10 @@ impl crate::shared::Item for Item {
                                 }
                             })
                             .collect();
+                        // SAFETY of the variant's decode: the enum's decoder populated its
+                        // variants' decoder with the enum's count, and decodes one a value.
                         quote! {
-                            match self.variants.decode() {
+                            match unsafe { self.variants.decode() } {
                                 #variants
                                 // Safety: VariantDecoder<_, N, _>::decode outputs numbers less than N.
                                 _ => unsafe { ::core::hint::unreachable_unchecked() }
@@ -309,7 +327,8 @@ impl crate::shared::Derive<{ Item::COUNT }> for Decode {
         let (decoder_impl_generics, decoder_generics, decoder_where_clause) =
             generics.split_for_impl();
 
-        let [mut type_body, mut default_body, populate_body, decode_in_place_body] = output;
+        let [mut type_body, mut default_body, populate_body, decode_in_place_body, cache_safe_body] =
+            output;
         if type_body.is_empty() {
             type_body = quote! { __spooky: ::core::marker::PhantomData<&#de ()>, };
         }
@@ -349,9 +368,14 @@ impl crate::shared::Derive<{ Item::COUNT }> for Decode {
                     }
                 }
 
-                impl #impl_generics #private::Decoder<#de, #input_ty> for #decoder_ty #where_clause {
+                // SAFETY: `decode_in_place` writes every field of a struct, or the whole value of
+                // an enum, and the decoder is `CACHE_SAFE` when each field's decoder is, holding
+                // nothing else.
+                unsafe impl #impl_generics #private::Decoder<#de, #input_ty> for #decoder_ty #where_clause {
+                    const CACHE_SAFE: bool = true #cache_safe_body;
+
                     #[cfg_attr(not(debug_assertions), inline(always))]
-                    fn decode_in_place(&mut self, out: &mut ::core::mem::MaybeUninit<#input_ty>) {
+                    unsafe fn decode_in_place(&mut self, out: &mut ::core::mem::MaybeUninit<#input_ty>) {
                         #decode_in_place_body
                     }
                 }

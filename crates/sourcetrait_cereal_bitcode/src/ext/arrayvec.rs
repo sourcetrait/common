@@ -7,9 +7,9 @@ use arrayvec::{ArrayString, ArrayVec};
 use core::mem::MaybeUninit;
 
 // TODO optimize ArrayVec impls and make ArrayString use them.
-impl<const N: usize> Encoder<ArrayString<N>> for StrEncoder {
+unsafe impl<const N: usize> Encoder<ArrayString<N>> for StrEncoder {
     #[inline(always)]
-    fn encode(&mut self, t: &ArrayString<N>) {
+    unsafe fn encode(&mut self, t: &ArrayString<N>) {
         // Only lengths < 255 are fast to encode and avoid copying lots of memory for 1 byte strings.
         // TODO miri doesn't like ArrayString::as_str().as_ptr(), replace with ArrayString::as_ptr() when available.
         if N > 64 || cfg!(miri) {
@@ -20,7 +20,7 @@ impl<const N: usize> Encoder<ArrayString<N>> for StrEncoder {
         let s = t.as_str();
         self.0.lengths.encode_less_than_255(s.len());
         let primitives = self.0.elements.as_primitive().unwrap();
-        primitives.reserve(N); // TODO Buffer::reserve impl additional * N so we can remove encode_vectored impl.
+        primitives.reserve(N); // TODO EncoderBuffer::reserve impl additional * N so we can remove encode_vectored impl.
         let dst = primitives.end_ptr();
 
         // Safety: `s.as_ptr()` points to `N` valid bytes since it's referencing an ArrayString<N>.
@@ -31,7 +31,7 @@ impl<const N: usize> Encoder<ArrayString<N>> for StrEncoder {
         }
     }
     #[inline(never)]
-    fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a ArrayString<N>> + Clone) {
+    unsafe fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a ArrayString<N>> + Clone) {
         // Only lengths < 255 are fast to encode and avoid copying lots of memory for 1 byte strings.
         // TODO miri doesn't like ArrayString::as_str().as_ptr(), replace with ArrayString::as_ptr() when available.
         if N > 64 || cfg!(miri) {
@@ -73,9 +73,11 @@ impl<'a, const N: usize> View<'a> for ArrayStringDecoder<'a, N> {
         Ok(())
     }
 }
-impl<'a, const N: usize> Decoder<'a, ArrayString<N>> for ArrayStringDecoder<'a, N> {
+unsafe impl<'a, const N: usize> Decoder<'a, ArrayString<N>> for ArrayStringDecoder<'a, N> {
+    const CACHE_SAFE: bool = true;
+
     #[inline(always)]
-    fn decode_in_place(&mut self, out: &mut MaybeUninit<ArrayString<N>>) {
+    unsafe fn decode_in_place(&mut self, out: &mut MaybeUninit<ArrayString<N>>) {
         let s: &str = self.0.decode();
         let array_string = out.write(ArrayString::new());
 
@@ -116,13 +118,13 @@ fn as_slice_assert_len<T, const N: usize>(t: &ArrayVec<T, N>) -> &[T] {
     s
 }
 
-impl<T: Encode, const N: usize> Encoder<ArrayVec<T, N>> for VecEncoder<T> {
+unsafe impl<T: Encode, const N: usize> Encoder<ArrayVec<T, N>> for VecEncoder<T> {
     #[inline(always)]
-    fn encode(&mut self, t: &ArrayVec<T, N>) {
+    unsafe fn encode(&mut self, t: &ArrayVec<T, N>) {
         self.encode(as_slice_assert_len(t));
     }
     #[inline(always)]
-    fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a ArrayVec<T, N>> + Clone)
+    unsafe fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a ArrayVec<T, N>> + Clone)
     where
         ArrayVec<T, N>: 'a,
     {
@@ -150,9 +152,13 @@ impl<'a, T: Decode<'a>, const N: usize> View<'a> for ArrayVecDecoder<'a, T, N> {
         Ok(())
     }
 }
-impl<'a, T: Decode<'a>, const N: usize> Decoder<'a, ArrayVec<T, N>> for ArrayVecDecoder<'a, T, N> {
+unsafe impl<'a, T: Decode<'a>, const N: usize> Decoder<'a, ArrayVec<T, N>>
+    for ArrayVecDecoder<'a, T, N>
+{
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode_in_place(&mut self, out: &mut MaybeUninit<ArrayVec<T, N>>) {
+    unsafe fn decode_in_place(&mut self, out: &mut MaybeUninit<ArrayVec<T, N>>) {
         // Safety: We've ensured self.lengths.max_len() <= N in populate.
         unsafe {
             let av = out.write(ArrayVec::new());

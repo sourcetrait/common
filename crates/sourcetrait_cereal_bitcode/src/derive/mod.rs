@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, View};
 use crate::consume::expect_eof;
 use crate::Error;
 use alloc::vec::Vec;
@@ -26,7 +26,8 @@ pub(crate) mod vec;
 #[doc(hidden)]
 pub mod __private {
     extern crate alloc;
-    pub use crate::coder::{uninit_field, Buffer, Decoder, Encoder, Result, View};
+    pub use crate::__private_uninit_field as uninit_field;
+    pub use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
     pub use crate::derive::variant::{VariantDecoder, VariantEncoder};
     pub use crate::derive::{Decode, Encode};
     pub fn invalid_enum_variant<T>() -> Result<T> {
@@ -39,7 +40,8 @@ pub mod __private {
 ///
 /// Use `#[derive(Encode)]` to implement.
 pub trait Encode {
-    #[doc(hidden)]
+    /// The encoder of the type's values, derived or written by hand against
+    /// [`crate::coder`].
     type Encoder: Encoder<Self>;
 }
 
@@ -47,7 +49,8 @@ pub trait Encode {
 ///
 /// Use `#[derive(Decode)]` to implement.
 pub trait Decode<'a>: Sized {
-    #[doc(hidden)]
+    /// The decoder of the type's values, derived or written by hand against
+    /// [`crate::coder`].
     type Decoder: Decoder<'a, Self>;
 
     /// Whether the type is a byte, whose collections a [`crate::Budget`]
@@ -64,13 +67,19 @@ impl<T> DecodeOwned for T where T: for<'de> Decode<'de> {}
 
 // Stop #[inline(always)] of Encoder::encode/Decoder::decode since 90% of the time is spent in these
 // functions, and we don't want extra code interfering with optimizations.
+/// # Safety
+/// [`Encoder::encode`]'s.
 #[inline(never)]
-fn encode_inline_never<T: Encode + ?Sized>(encoder: &mut T::Encoder, t: &T) {
-    encoder.encode(t);
+unsafe fn encode_inline_never<T: Encode + ?Sized>(encoder: &mut T::Encoder, t: &T) {
+    // SAFETY: the caller's contract is `encode`'s.
+    unsafe { encoder.encode(t) };
 }
+/// # Safety
+/// [`Decoder::decode`]'s.
 #[inline(never)]
-fn decode_inline_never<'a, T: Decode<'a>>(decoder: &mut T::Decoder) -> T {
-    decoder.decode()
+unsafe fn decode_inline_never<'a, T: Decode<'a>>(decoder: &mut T::Decoder) -> T {
+    // SAFETY: the caller's contract is `decode`'s.
+    unsafe { decoder.decode() }
 }
 
 /// Encodes a `T:` [`Encode`] into a [`Vec<u8>`].
@@ -79,7 +88,8 @@ fn decode_inline_never<'a, T: Decode<'a>>(decoder: &mut T::Decoder) -> T {
 pub fn encode<T: Encode + ?Sized>(t: &T) -> Vec<u8> {
     let mut encoder = T::Encoder::default();
     encoder.reserve(NonZeroUsize::new(1).unwrap());
-    encode_inline_never(&mut encoder, t);
+    // SAFETY: room for the one value was reserved above.
+    unsafe { encode_inline_never(&mut encoder, t) };
     encoder.collect()
 }
 
@@ -90,32 +100,43 @@ pub fn decode<'a, T: Decode<'a>>(mut bytes: &'a [u8]) -> Result<T, Error> {
     let mut decoder = T::Decoder::default();
     decoder.populate(&mut bytes, 1)?;
     expect_eof(bytes)?;
-    Ok(decode_inline_never(&mut decoder))
+    // SAFETY: populate validated the one value.
+    Ok(unsafe { decode_inline_never(&mut decoder) })
 }
 
 impl crate::buffer::Buffer {
     /// Like [`encode`], but saves allocations between calls.
     pub fn encode<'a, T: Encode + ?Sized>(&'a mut self, t: &T) -> &'a [u8] {
-        // Safety: Encoders don't have any lifetimes (they don't contain T either).
+        // Safety: An encoder keeps nothing borrowed from the values it encodes, as `Encoder`'s
+        // implementer promises, so one kept across calls with its lifetimes erased holds nothing
+        // stale.
         let encoder = unsafe { self.registry.get_non_static::<T::Encoder>() };
         encoder.reserve(NonZeroUsize::new(1).unwrap());
-        encode_inline_never(encoder, t);
+        // SAFETY: room for the one value was reserved above.
+        unsafe { encode_inline_never(encoder, t) };
         self.out.clear();
         encoder.collect_into(&mut self.out);
         self.out.as_slice()
     }
 
-    /// Like [`decode`], but saves allocations between calls.
+    /// Like [`decode`], but saves allocations between calls. A type whose
+    /// decoder isn't [`Decoder::CACHE_SAFE`] decodes each input with a decoder
+    /// of its own, as [`decode`] does.
     pub fn decode<'a, T: Decode<'a>>(&mut self, mut bytes: &'a [u8]) -> Result<T, Error> {
+        if !<T::Decoder as Decoder<'a, T>>::CACHE_SAFE {
+            return decode(bytes);
+        }
         // Safety: Decoders have dangling pointers to `bytes` from previous calls which haven't been
         // cleared. This isn't an issue in practice because they remain as pointers in FastSlice and
-        // aren't dereferenced. If we wanted to be safer we could clear all the decoders but this
-        // would result in lots of extra code to maintain and a performance/binary size hit.
+        // aren't dereferenced, as every decoder declaring itself `CACHE_SAFE` promises. If we
+        // wanted to be safer we could clear all the decoders but this would result in lots of extra
+        // code to maintain and a performance/binary size hit.
         // To detect misuse we run miri tests/cargo fuzz where bytes goes out of scope between calls.
         let decoder = unsafe { self.registry.get_non_static::<T::Decoder>() };
         decoder.populate(&mut bytes, 1)?;
         expect_eof(bytes)?;
-        Ok(decode_inline_never(decoder))
+        // SAFETY: populate validated the one value.
+        Ok(unsafe { decode_inline_never(decoder) })
     }
 }
 

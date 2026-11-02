@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::consume::consume_byte_arrays;
 use crate::fast::{FastSlice, NextUnchecked, PushUnchecked, VecImpl};
 use alloc::vec::Vec;
@@ -7,14 +7,14 @@ use core::num::NonZeroUsize;
 #[derive(Default)]
 pub struct F32Encoder(VecImpl<f32>);
 
-impl Encoder<f32> for F32Encoder {
+unsafe impl Encoder<f32> for F32Encoder {
     #[inline(always)]
     fn as_primitive(&mut self) -> Option<&mut VecImpl<f32>> {
         Some(&mut self.0)
     }
 
     #[inline(always)]
-    fn encode(&mut self, t: &f32) {
+    unsafe fn encode(&mut self, t: &f32) {
         unsafe { self.0.push_unchecked(*t) };
     }
 }
@@ -48,7 +48,7 @@ unsafe fn encode_tail(tail: &[f32], mantissa: *mut [u8; 3], sign_exp: *mut u8) {
     }
 }
 
-impl Buffer for F32Encoder {
+impl EncoderBuffer for F32Encoder {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         let floats = self.0.as_slice();
         let Some(first_float) = floats.get(0).copied() else {
@@ -119,9 +119,11 @@ impl<'a> View<'a> for F32Decoder<'a> {
     }
 }
 
-impl<'a> Decoder<'a, f32> for F32Decoder<'a> {
+unsafe impl<'a> Decoder<'a, f32> for F32Decoder<'a> {
+    const CACHE_SAFE: bool = true;
+
     #[inline(always)]
-    fn decode(&mut self) -> f32 {
+    unsafe fn decode(&mut self) -> f32 {
         let mantissa_ptr = unsafe { self.mantissa.next_unchecked_as_ptr() };
 
         // Loading 4 bytes instead of 3 is 30% faster, so we read 1 extra byte after mantissa_ptr.
@@ -152,7 +154,7 @@ mod tests {
                 encoder.reserve(additional);
             }
             for &f in &floats {
-                encoder.encode(&f);
+                unsafe { encoder.encode(&f) };
             }
             let bytes = encoder.collect();
 
@@ -161,7 +163,7 @@ mod tests {
             decoder.populate(&mut slice, floats.len()).unwrap();
             assert!(slice.is_empty());
             for &f in &floats {
-                assert_eq!(f.to_bits(), decoder.decode().to_bits());
+                assert_eq!(f.to_bits(), unsafe { decoder.decode() }.to_bits());
             }
         }
     }

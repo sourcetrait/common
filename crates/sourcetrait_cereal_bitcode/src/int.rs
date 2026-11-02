@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::error::err;
 use crate::fast::{CowSlice, NextUnchecked, PushUnchecked, SliceImpl, Unaligned, VecImpl};
 use crate::pack_ints::{pack_ints, unpack_ints, Int};
@@ -11,7 +11,7 @@ use core::num::NonZeroUsize;
 pub struct IntEncoder<T>(VecImpl<T>);
 
 /// Makes IntEncoder<u32> able to encode i32/f32/char.
-impl<T: Int, P: NoUninit> Encoder<P> for IntEncoder<T> {
+unsafe impl<T: Int, P: NoUninit> Encoder<P> for IntEncoder<T> {
     #[inline(always)]
     fn as_primitive(&mut self) -> Option<&mut VecImpl<P>> {
         use core::mem::*;
@@ -22,13 +22,13 @@ impl<T: Int, P: NoUninit> Encoder<P> for IntEncoder<T> {
     }
 
     #[inline(always)]
-    fn encode(&mut self, p: &P) {
+    unsafe fn encode(&mut self, p: &P) {
         let t = bytemuck::must_cast(*p);
         unsafe { self.0.push_unchecked(t) };
     }
 }
 
-impl<T: Int> Buffer for IntEncoder<T> {
+impl<T: Int> EncoderBuffer for IntEncoder<T> {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         pack_ints(self.0.as_mut_slice(), out);
         self.0.clear();
@@ -59,14 +59,16 @@ impl<'a, T: Int> View<'a> for IntDecoder<'a, T> {
 }
 
 // Makes IntDecoder<u32> able to decode i32/f32 (but not char since it can fail).
-impl<'a, T: Int, P: Pod> Decoder<'a, P> for IntDecoder<'a, T> {
+unsafe impl<'a, T: Int, P: Pod> Decoder<'a, P> for IntDecoder<'a, T> {
+    const CACHE_SAFE: bool = true;
+
     #[inline(always)]
     fn as_primitive(&mut self) -> Option<&mut SliceImpl<'_, Unaligned<P>>> {
         Some(self.0.mut_slice().cast())
     }
 
     #[inline(always)]
-    fn decode(&mut self) -> P {
+    unsafe fn decode(&mut self) -> P {
         let v = unsafe { self.0.mut_slice().next_unchecked() };
         bytemuck::must_cast(v)
     }
@@ -91,8 +93,10 @@ where
 
         let mut decoder = self.0.borrowed_clone();
         // Optimizes much better than Iterator::any.
+        // SAFETY: `self.0` was populated with `length` values, which its borrowed clone decodes
+        // once each.
         if (0..length)
-            .filter(|_| !C::is_valid_bit_pattern(&decoder.decode()))
+            .filter(|_| !C::is_valid_bit_pattern(&unsafe { decoder.decode() }))
             .count()
             != 0
         {
@@ -102,10 +106,13 @@ where
     }
 }
 
-impl<'a, C: CheckedBitPattern + Send + Sync, I: Int> Decoder<'a, C> for CheckedIntDecoder<'a, C, I>
+unsafe impl<'a, C: CheckedBitPattern + Send + Sync, I: Int> Decoder<'a, C>
+    for CheckedIntDecoder<'a, C, I>
 where
     <C as CheckedBitPattern>::Bits: Pod,
 {
+    const CACHE_SAFE: bool = true;
+
     #[inline(always)]
     fn as_primitive(&mut self) -> Option<&mut SliceImpl<'_, Unaligned<C>>> {
         self.0
@@ -119,7 +126,7 @@ where
     }
 
     #[inline(always)]
-    fn decode(&mut self) -> C {
+    unsafe fn decode(&mut self) -> C {
         let v: I = self.0.decode();
         let v: C::Bits = bytemuck::must_cast(v);
         // Safety: C::Bits and C have the same layout and populate ensured C's bit pattern is valid.

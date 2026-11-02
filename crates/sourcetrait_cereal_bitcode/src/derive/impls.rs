@@ -1,5 +1,5 @@
 use crate::bool::{BoolDecoder, BoolEncoder};
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::derive::array::{ArrayDecoder, ArrayEncoder};
 use crate::derive::empty::EmptyCoder;
 use crate::derive::map::{MapDecoder, MapEncoder};
@@ -252,23 +252,23 @@ macro_rules! impl_tuples {
                     }
                 }
 
-                impl<$($name: Encode,)*> Encoder<($($name,)*)> for TupleEncoder<$($name,)*> {
+                unsafe impl<$($name: Encode,)*> Encoder<($($name,)*)> for TupleEncoder<$($name,)*> {
                     #[inline(always)]
-                    fn encode(&mut self, t: &($($name,)*)) {
+                    unsafe fn encode(&mut self, t: &($($name,)*)) {
                         $(
                             self.$n.encode(&t.$n);
                         )*
                     }
 
                     // #[inline(always)]
-                    fn encode_vectored<'a>(&mut self, i: impl Iterator<Item=&'a ($($name,)*)> + Clone) where ($($name,)*): 'a {
+                    unsafe fn encode_vectored<'a>(&mut self, i: impl Iterator<Item=&'a ($($name,)*)> + Clone) where ($($name,)*): 'a {
                         $(
                             self.$n.encode_vectored(i.clone().map(|t| &t.$n));
                         )*
                     }
                 }
 
-                impl<$($name: Encode,)*> Buffer for TupleEncoder<$($name,)*> {
+                impl<$($name: Encode,)*> EncoderBuffer for TupleEncoder<$($name,)*> {
                     fn collect_into(&mut self, out: &mut Vec<u8>) {
                         $(
                             self.$n.collect_into(out);
@@ -300,9 +300,11 @@ macro_rules! impl_tuples {
                     }
                 }
 
-                impl<'a, $($name: Decode<'a>,)*> Decoder<'a, ($($name,)*)> for TupleDecoder<'a, $($name,)*> {
+                unsafe impl<'a, $($name: Decode<'a>,)*> Decoder<'a, ($($name,)*)> for TupleDecoder<'a, $($name,)*> {
+                    const CACHE_SAFE: bool = true $(&& <$name::Decoder as Decoder<'a, $name>>::CACHE_SAFE)*;
+
                     #[inline(always)]
-                    fn decode_in_place(&mut self, out: &mut MaybeUninit<($($name,)*)>) {
+                    unsafe fn decode_in_place(&mut self, out: &mut MaybeUninit<($($name,)*)>) {
                         $(
                             self.$n.decode_in_place(crate::coder::uninit_field!(out.$n: $name));
                         )*

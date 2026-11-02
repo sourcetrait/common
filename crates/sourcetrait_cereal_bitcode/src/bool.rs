@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::fast::{CowSlice, NextUnchecked, PushUnchecked, SliceImpl, Unaligned, VecImpl};
 use crate::pack::{pack_bools, unpack_bools};
 use alloc::vec::Vec;
@@ -7,19 +7,19 @@ use core::num::NonZeroUsize;
 #[derive(Default)]
 pub struct BoolEncoder(VecImpl<bool>);
 
-impl Encoder<bool> for BoolEncoder {
+unsafe impl Encoder<bool> for BoolEncoder {
     #[inline(always)]
     fn as_primitive(&mut self) -> Option<&mut VecImpl<bool>> {
         Some(&mut self.0)
     }
 
     #[inline(always)]
-    fn encode(&mut self, t: &bool) {
+    unsafe fn encode(&mut self, t: &bool) {
         unsafe { self.0.push_unchecked(*t) };
     }
 }
 
-impl Buffer for BoolEncoder {
+impl EncoderBuffer for BoolEncoder {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         pack_bools(self.0.as_slice(), out);
         self.0.clear();
@@ -40,7 +40,9 @@ impl<'a> View<'a> for BoolDecoder<'a> {
     }
 }
 
-impl<'a> Decoder<'a, bool> for BoolDecoder<'a> {
+unsafe impl<'a> Decoder<'a, bool> for BoolDecoder<'a> {
+    const CACHE_SAFE: bool = true;
+
     #[inline(always)]
     fn as_primitive(&mut self) -> Option<&mut SliceImpl<'_, Unaligned<bool>>> {
         // Safety: `Unaligned<bool>` is equivalent to bool since it's a `#[repr(C, packed)]` wrapper
@@ -49,7 +51,7 @@ impl<'a> Decoder<'a, bool> for BoolDecoder<'a> {
     }
 
     #[inline(always)]
-    fn decode(&mut self) -> bool {
+    unsafe fn decode(&mut self) -> bool {
         unsafe { self.0.mut_slice().next_unchecked() }
     }
 }

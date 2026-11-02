@@ -1,5 +1,5 @@
 use crate::budget;
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::consume::consume_bytes;
 use crate::derive::vec::VecEncoder;
 use crate::error::err;
@@ -20,7 +20,7 @@ fn str_as_u8_chars(s: &str) -> &[U8Char] {
     bytemuck::must_cast_slice(s.as_bytes())
 }
 
-impl Buffer for StrEncoder {
+impl EncoderBuffer for StrEncoder {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         self.0.collect_into(out);
     }
@@ -30,27 +30,27 @@ impl Buffer for StrEncoder {
     }
 }
 
-impl Encoder<str> for StrEncoder {
+unsafe impl Encoder<str> for StrEncoder {
     #[inline(always)]
-    fn encode(&mut self, t: &str) {
+    unsafe fn encode(&mut self, t: &str) {
         self.0.encode(str_as_u8_chars(t));
     }
 
     #[inline(always)]
-    fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a str> + Clone) {
+    unsafe fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a str> + Clone) {
         self.0.encode_vectored(i.map(str_as_u8_chars));
     }
 }
 
 // TODO find a way to remove this shim.
-impl<'b> Encoder<&'b str> for StrEncoder {
+unsafe impl<'b> Encoder<&'b str> for StrEncoder {
     #[inline(always)]
-    fn encode(&mut self, t: &&str) {
+    unsafe fn encode(&mut self, t: &&str) {
         self.encode(*t);
     }
 
     #[inline(always)]
-    fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a &'b str> + Clone)
+    unsafe fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a &'b str> + Clone)
     where
         &'b str: 'a,
     {
@@ -58,14 +58,14 @@ impl<'b> Encoder<&'b str> for StrEncoder {
     }
 }
 
-impl Encoder<String> for StrEncoder {
+unsafe impl Encoder<String> for StrEncoder {
     #[inline(always)]
-    fn encode(&mut self, t: &String) {
+    unsafe fn encode(&mut self, t: &String) {
         self.encode(t.as_str());
     }
 
     #[inline(always)]
-    fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a String> + Clone)
+    unsafe fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a String> + Clone)
     where
         String: 'a,
     {
@@ -106,7 +106,9 @@ impl<'a> View<'a> for StrDecoder<'a> {
                 let mut length_decoder = self.lengths.borrowed_clone();
                 let mut end = 0;
                 for _ in 0..length.get() - 1 {
-                    end += length_decoder.decode();
+                    // SAFETY: `self.lengths` was populated with `length` values, of which its
+                    // borrowed clone decodes the first `length - 1`.
+                    end += unsafe { length_decoder.decode() };
                     // TODO(optimization) is_char_boundary has unnecessary checks.
                     if !s.is_char_boundary(end) {
                         return false;
@@ -123,9 +125,11 @@ impl<'a> View<'a> for StrDecoder<'a> {
     }
 }
 
-impl<'a> Decoder<'a, &'a str> for StrDecoder<'a> {
+unsafe impl<'a> Decoder<'a, &'a str> for StrDecoder<'a> {
+    const CACHE_SAFE: bool = true;
+
     #[inline(always)]
-    fn decode(&mut self) -> &'a str {
+    unsafe fn decode(&mut self) -> &'a str {
         let bytes = unsafe { self.strings.chunk_unchecked(self.lengths.decode()) };
         debug_assert!(from_utf8(bytes).is_ok());
 
@@ -135,9 +139,11 @@ impl<'a> Decoder<'a, &'a str> for StrDecoder<'a> {
     }
 }
 
-impl<'a> Decoder<'a, String> for StrDecoder<'a> {
+unsafe impl<'a> Decoder<'a, String> for StrDecoder<'a> {
+    const CACHE_SAFE: bool = true;
+
     #[inline(always)]
-    fn decode(&mut self) -> String {
+    unsafe fn decode(&mut self) -> String {
         let v: &str = self.decode();
         v.to_owned()
     }

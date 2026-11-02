@@ -20,15 +20,15 @@ macro_rules! impl_struct {
                     $f: <$ft as crate::Encode>::Encoder,
                 )+
             }
-            impl crate::coder::Encoder<$t> for StructEncoder {
+            unsafe impl crate::coder::Encoder<$t> for StructEncoder {
                 #[inline(always)]
-                fn encode(&mut self, t: &$t) {
+                unsafe fn encode(&mut self, t: &$t) {
                     $(
                         self.$f.encode(&t.$f);
                     )+
                 }
             }
-            impl crate::coder::Buffer for StructEncoder {
+            impl crate::coder::EncoderBuffer for StructEncoder {
                 fn collect_into(&mut self, out: &mut Vec<u8>) {
                     $(
                         self.$f.collect_into(out);
@@ -59,10 +59,14 @@ macro_rules! impl_struct {
                     Ok(())
                 }
             }
-            impl<'a> crate::coder::Decoder<'a, $t> for StructDecoder<'a> {
+            unsafe impl<'a> crate::coder::Decoder<'a, $t> for StructDecoder<'a> {
+                const CACHE_SAFE: bool = true $(
+                    && <<$ft as crate::Decode<'a>>::Decoder as crate::coder::Decoder<'a, $ft>>::CACHE_SAFE
+                )+;
+
                 // TODO use decode_in_place instead.
                 #[inline(always)]
-                fn decode(&mut self) -> $t {
+                unsafe fn decode(&mut self) -> $t {
                     $t::$new($(self.$f.decode()),+)
                 }
             }

@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::consume::mul_length;
 use crate::derive::{Decode, Encode};
 use crate::fast::{FastSlice, FastVec, Unaligned};
@@ -15,7 +15,7 @@ impl<T: Encode, const N: usize> Default for ArrayEncoder<T, N> {
     }
 }
 
-impl<T: Encode, const N: usize> Encoder<[T; N]> for ArrayEncoder<T, N> {
+unsafe impl<T: Encode, const N: usize> Encoder<[T; N]> for ArrayEncoder<T, N> {
     fn as_primitive(&mut self) -> Option<&mut FastVec<[T; N]>> {
         // FastVec doesn't work on ZST.
         if N == 0 {
@@ -34,7 +34,7 @@ impl<T: Encode, const N: usize> Encoder<[T; N]> for ArrayEncoder<T, N> {
     }
 
     #[inline(always)]
-    fn encode(&mut self, array: &[T; N]) {
+    unsafe fn encode(&mut self, array: &[T; N]) {
         // TODO use encode_vectored if N is large enough.
         for v in array {
             self.0.encode(v);
@@ -42,7 +42,7 @@ impl<T: Encode, const N: usize> Encoder<[T; N]> for ArrayEncoder<T, N> {
     }
 }
 
-impl<T: Encode, const N: usize> Buffer for ArrayEncoder<T, N> {
+impl<T: Encode, const N: usize> EncoderBuffer for ArrayEncoder<T, N> {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         self.0.collect_into(out);
     }
@@ -75,7 +75,9 @@ impl<'a, T: Decode<'a>, const N: usize> View<'a> for ArrayDecoder<'a, T, N> {
     }
 }
 
-impl<'a, T: Decode<'a>, const N: usize> Decoder<'a, [T; N]> for ArrayDecoder<'a, T, N> {
+unsafe impl<'a, T: Decode<'a>, const N: usize> Decoder<'a, [T; N]> for ArrayDecoder<'a, T, N> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
+
     fn as_primitive(&mut self) -> Option<&mut FastSlice<'_, Unaligned<[T; N]>>> {
         self.0.as_primitive().map(|s| {
             // Safety: FastSlice doesn't have a length unlike slice, so casting to FastSlice<[T; N]>
@@ -85,7 +87,7 @@ impl<'a, T: Decode<'a>, const N: usize> Decoder<'a, [T; N]> for ArrayDecoder<'a,
     }
 
     #[inline(always)]
-    fn decode_in_place(&mut self, out: &mut MaybeUninit<[T; N]>) {
+    unsafe fn decode_in_place(&mut self, out: &mut MaybeUninit<[T; N]>) {
         // Safety: Equivalent to nightly MaybeUninit::transpose.
         let out = unsafe { &mut *(out.as_mut_ptr() as *mut [MaybeUninit<T>; N]) };
         for out in out {
@@ -96,7 +98,7 @@ impl<'a, T: Decode<'a>, const N: usize> Decoder<'a, [T; N]> for ArrayDecoder<'a,
 
 #[cfg(all(test, feature = "nightly"))]
 mod tests {
-    use crate::coder::{Buffer, Encoder};
+    use crate::coder::{Encoder, EncoderBuffer};
     use crate::error::err;
     use crate::length::LengthEncoder;
     use crate::{decode, encode};
@@ -116,7 +118,7 @@ mod tests {
         const N: usize = 16384;
         let mut encoder = LengthEncoder::default();
         encoder.reserve(NonZeroUsize::MIN);
-        encoder.encode(&(usize::MAX / N + 1));
+        unsafe { encoder.encode(&(usize::MAX / N + 1)) };
         let bytes = encoder.collect();
         assert_eq!(decode::<Vec<[u8; N]>>(&bytes), err("length overflow"));
     }

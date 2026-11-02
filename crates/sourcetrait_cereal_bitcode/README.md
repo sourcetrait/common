@@ -2,7 +2,8 @@
 
 SourceTrait's fork of [bitcode](https://github.com/SoftbearStudios/bitcode),
 taken from its published 0.6.9 with upstream's master since merged. It adds a
-budgeted decode and sound short copies, and its wire format is upstream's.
+budgeted decode, sound short copies, and a public coder API, and its wire
+format is upstream's.
 `CODEC` names the codec, `cereal-bitcode-` and the crate's version.
 
 A dependent takes it under bitcode's own name, so the derive's paths hold:
@@ -85,6 +86,36 @@ and last, so every byte read lies inside it. On an x86-64 desktop, upstream's
 two benchmarks of short slices, `bench_bool_vecs_encode` and
 `bench_str_vec_encode`, run 5% and 6% slower than with upstream's over-read,
 where a plain `memcpy` of each slice runs 97% and 67% slower.
+
+## Coder API
+This fork makes bitcode's coder traits a public extension API, the `coder`
+module, for a type whose encoder and decoder are written by hand. A type names
+its coders as `Encode::Encoder` and `Decode::Decoder`. An encoder fills
+columns: `EncoderBuffer::reserve` makes room, `Encoder::encode` and
+`Encoder::encode_vectored` put values in, and `EncoderBuffer::collect_into`
+writes the columns out. A decoder reads them back: `View::populate` reads and
+validates a number of values' columns, refusing input that does not decode
+with `Error::new`, and `Decoder::decode` takes each value out.
+
+Each contract the encoding relies on is carried by the types. `encode`,
+`encode_vectored`, `decode`, and `decode_in_place` are `unsafe fn`s whose
+callers keep their contracts: a value goes only into room a reserve made, a
+vectored chunk holds an exact count of 1 to `MAX_VECTORED_CHUNK` values, and a
+value is decoded only after a populate validated it. `Encoder` and `Decoder`
+are `unsafe trait`s whose implementers keep theirs: an encoder keeps nothing
+borrowed from a value once its encode returns, and a decoder's
+`decode_in_place` initializes its output. `Buffer::decode` keeps a decoder
+across inputs only when it declares `Decoder::CACHE_SAFE`, promising that
+nothing it holds from an earlier input is read again; a recursive type's lazy
+decoder states that constant itself, since its mirror's decoder takes its own
+from the lazy decoder. A
+decoder charges a budgeted decode through `budget::enter`, `budget::heap`, and
+`budget::unbudgeted` before it reads or allocates what it charges. Each only
+spends the scope `decode_budgeted` opens, and the `budget::Level` that `enter`
+takes gives back to that scope alone.
+
+The derive's coders and the crate's own implement the same traits, and the wire
+format stays upstream's: a differential against crates.io's 0.6.9 holds it.
 
 ## `serde`
 A `serde` integration is gated behind the `"serde"` feature flag. Click [here](https://github.com/SoftbearStudios/bitcode/wiki/Serde) to learn more.

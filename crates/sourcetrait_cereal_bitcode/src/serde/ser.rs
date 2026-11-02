@@ -1,5 +1,5 @@
 use crate::bool::BoolEncoder;
-use crate::coder::{Buffer, Encoder, Result};
+use crate::coder::{Encoder, EncoderBuffer, Result};
 use crate::error::{err, Error};
 use crate::f32::F32Encoder;
 use crate::int::IntEncoder;
@@ -112,7 +112,7 @@ impl Default for LazyEncoder {
 }
 
 impl LazyEncoder {
-    /// Analogous [`Buffer::collect`], but requires `index_alloc` from serialization.
+    /// Analogous [`EncoderBuffer::collect`], but requires `index_alloc` from serialization.
     fn collect(&mut self, index_alloc: usize) -> Vec<u8> {
         // If we just wrote out the buffers in field order we wouldn't be able to deserialize them
         // since we might learn their types from serde in a different order.
@@ -132,7 +132,7 @@ impl LazyEncoder {
         bytes
     }
 
-    fn reorder<'a>(&'a mut self, buffers: &mut [Option<&'a mut dyn Buffer>]) {
+    fn reorder<'a>(&'a mut self, buffers: &mut [Option<&'a mut dyn EncoderBuffer>]) {
         match self {
             Self::Specified { specified, index } => {
                 buffers[*index] = Some(match specified {
@@ -254,7 +254,10 @@ impl<'a> EncoderWrapper<'a> {
     #[inline(always)]
     fn serialize_enum(self, variant_index: u32) -> Result<EncoderWrapper<'a>> {
         let b = specify!(self, Enum);
-        b.0.encode(&Self::variant_index_u8(variant_index)?);
+        // SAFETY: the serializer reserves an encoder for each value it encodes: `specify!`
+        // reserves a new encoder what its parent reserved, and each collection reserves its
+        // elements by `reserve_fast`.
+        unsafe { b.0.encode(&Self::variant_index_u8(variant_index)?) };
         let lazy = get_mut_or_resize(&mut b.1, variant_index as usize);
         lazy.reserve_fast(1); // TODO use push instead.
         Ok(Self {
@@ -269,7 +272,9 @@ macro_rules! impl_ser {
         // #[inline(always)] seems to be slower than regular #[inline] in this case.
         #[inline]
         fn $name(self, v: $t) -> Result<()> {
-            specify!(self, $variant).encode(&v);
+            let b = specify!(self, $variant);
+            // SAFETY: as in `serialize_enum`.
+            unsafe { b.encode(&v) };
             Ok(())
         }
     };
@@ -314,7 +319,10 @@ impl<'a> Serializer for EncoderWrapper<'a> {
     fn serialize_none(self) -> Result<Self::Ok> {
         // Faster than self.serialize_enum(0)? because it skips resizing vec and reserving nothing.
         // TODO generates multiple copies of specify!(self, Enum) -> cold.
-        Ok(specify!(self, Enum).0.encode(&0))
+        let b = specify!(self, Enum);
+        // SAFETY: as in `serialize_enum`.
+        unsafe { b.0.encode(&0) };
+        Ok(())
     }
 
     #[inline(always)]
@@ -343,9 +351,10 @@ impl<'a> Serializer for EncoderWrapper<'a> {
         _variant: &'static str,
     ) -> Result<Self::Ok> {
         // Faster than self.serialize_enum(variant_index)? because it skips resizing vec and reserving nothing.
-        Ok(specify!(self, Enum)
-            .0
-            .encode(&Self::variant_index_u8(variant_index)?))
+        let b = specify!(self, Enum);
+        // SAFETY: as in `serialize_enum`.
+        unsafe { b.0.encode(&Self::variant_index_u8(variant_index)?) };
+        Ok(())
     }
 
     #[inline(always)]
@@ -374,7 +383,8 @@ impl<'a> Serializer for EncoderWrapper<'a> {
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
         let len = len.expect("sequence must have len");
         let b = specify!(self, Seq);
-        b.0.encode(&len);
+        // SAFETY: as in `serialize_enum`.
+        unsafe { b.0.encode(&len) };
         b.1.reserve_fast(len);
         Ok(SeqSerializer {
             lazy: &mut b.1,
@@ -461,7 +471,8 @@ impl<'a> Serializer for EncoderWrapper<'a> {
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         let len = len.expect("sequence must have len");
         let b = specify!(self, Map);
-        b.0.encode(&len);
+        // SAFETY: as in `serialize_enum`.
+        unsafe { b.0.encode(&len) };
         b.1 .0.reserve_fast(len);
         b.1 .1.reserve_fast(len);
         Ok(MapSerializer {

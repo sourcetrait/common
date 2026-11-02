@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, Result, View, MAX_VECTORED_CHUNK};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View, MAX_VECTORED_CHUNK};
 use crate::derive::variant::{VariantDecoder, VariantEncoder};
 use crate::derive::{Decode, Encode};
 use crate::fast::{FastArrayVec, PushUnchecked};
@@ -21,9 +21,9 @@ impl<T: Encode> Default for OptionEncoder<T> {
     }
 }
 
-impl<T: Encode> Encoder<Option<T>> for OptionEncoder<T> {
+unsafe impl<T: Encode> Encoder<Option<T>> for OptionEncoder<T> {
     #[inline(always)]
-    fn encode(&mut self, t: &Option<T>) {
+    unsafe fn encode(&mut self, t: &Option<T>) {
         self.variants.encode(&(t.is_some() as u8));
         if let Some(t) = t {
             self.some.reserve(NonZeroUsize::new(1).unwrap());
@@ -31,7 +31,7 @@ impl<T: Encode> Encoder<Option<T>> for OptionEncoder<T> {
         }
     }
 
-    fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a Option<T>> + Clone)
+    unsafe fn encode_vectored<'a>(&mut self, i: impl Iterator<Item = &'a Option<T>> + Clone)
     where
         Option<T>: 'a,
     {
@@ -73,7 +73,7 @@ impl<T: Encode> Encoder<Option<T>> for OptionEncoder<T> {
     }
 }
 
-impl<T: Encode> Buffer for OptionEncoder<T> {
+impl<T: Encode> EncoderBuffer for OptionEncoder<T> {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         self.variants.collect_into(out);
         self.some.collect_into(out);
@@ -107,9 +107,11 @@ impl<'a, T: Decode<'a>> View<'a> for OptionDecoder<'a, T> {
     }
 }
 
-impl<'a, T: Decode<'a>> Decoder<'a, Option<T>> for OptionDecoder<'a, T> {
+unsafe impl<'a, T: Decode<'a>> Decoder<'a, Option<T>> for OptionDecoder<'a, T> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode_in_place(&mut self, out: &mut MaybeUninit<Option<T>>) {
+    unsafe fn decode_in_place(&mut self, out: &mut MaybeUninit<Option<T>>) {
         if self.variants.decode() != 0 {
             out.write(Some(self.some.decode()));
         } else {

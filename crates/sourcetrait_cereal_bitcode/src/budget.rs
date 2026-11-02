@@ -4,9 +4,16 @@
 //!
 //! A sourcetrait addition to bitcode. A decode outside [`decode_budgeted`]
 //! charges nothing and runs as upstream's does.
+//!
+//! A decoder outside the crate charges the budget through [`enter`], [`heap`],
+//! and [`unbudgeted`] from its [`View::populate`](crate::coder::View::populate),
+//! before it reads or allocates what it charges. Each only spends the scope
+//! [`decode_budgeted`] opens, and the [`Level`] that [`enter`] takes gives back
+//! to that scope alone.
 use crate::coder::Result;
 use crate::error::Error;
 use core::fmt::{self, Display, Formatter};
+use core::marker::PhantomData;
 use core::mem::size_of;
 
 /// The bounds one decode is held to.
@@ -103,10 +110,15 @@ pub(crate) const fn slice_after_two_words(align: usize) -> usize {
 }
 
 /// The nesting level a collection's elements take while they populate, given
-/// back when it drops.
-pub(crate) struct Level {
+/// back to the scope it was taken from when it drops. It stays on the thread
+/// that took it.
+#[must_use = "a level is held while the collection's elements populate"]
+pub struct Level {
+    /// The scope the level was taken from, if one was.
     #[cfg(feature = "std")]
-    taken: bool,
+    scope: Option<u64>,
+    /// Keeps the level on its thread, whose scope it gives back to.
+    _thread: PhantomData<*const ()>,
 }
 
 #[cfg(feature = "std")]
@@ -122,10 +134,14 @@ mod scoped {
         heap: u64,
         depth: u32,
         stopped: Option<Stop>,
+        /// The scope's number, unique on its thread.
+        scope: u64,
     }
 
     std::thread_local! {
         static LEFT: Cell<Option<Left>> = const { Cell::new(None) };
+        /// The number of the thread's last scope.
+        static SCOPES: Cell<u64> = const { Cell::new(0) };
     }
 
     /// The thread's budget for one decode, the outer scope's restored on drop.
@@ -136,11 +152,17 @@ mod scoped {
     impl Scope {
         /// A scope holding the thread's decodes to `budget` until it drops.
         pub(crate) fn enter(budget: Budget) -> Self {
+            let scope = SCOPES.with(|s| {
+                let scope = s.get().wrapping_add(1);
+                s.set(scope);
+                scope
+            });
             let left = Left {
                 elements: budget.elements,
                 heap: budget.heap,
                 depth: budget.depth,
                 stopped: None,
+                scope,
             };
             Self {
                 outer: LEFT.with(|l| l.replace(Some(left))),
@@ -160,17 +182,17 @@ mod scoped {
     }
 
     /// `left` changed by `take`, in one visit to the thread's budget, refused
-    /// at the first stop it returns; false outside a scope.
+    /// at the first stop it returns: the scope's number, or none outside one.
     #[inline(always)]
-    fn charge(take: impl FnOnce(&mut Left) -> Option<Stop>) -> Result<bool> {
+    fn charge(take: impl FnOnce(&mut Left) -> Option<Stop>) -> Result<Option<u64>> {
         LEFT.with(|l| {
             let Some(mut left) = l.get() else {
-                return Ok(false);
+                return Ok(None);
             };
             match take(&mut left) {
                 None => {
                     l.set(Some(left));
-                    Ok(true)
+                    Ok(Some(left.scope))
                 }
                 Some(stop) => {
                     left.stopped = left.stopped.or(Some(stop));
@@ -181,17 +203,20 @@ mod scoped {
         })
     }
 
-    /// A collection's `n` elements of `each` heap bytes, counted as elements
-    /// when `counted`, and a nesting level while they populate when there are
-    /// any: one visit to the thread's budget, refused at the first bound passed.
-    /// An empty collection charges nothing and takes no level, so it skips the
-    /// visit.
+    /// Charges a collection's `n` elements of `each` heap bytes, counted as
+    /// elements when `counted`, and takes a nesting level while they populate
+    /// when there are any: one visit to the thread's budget, refused at the
+    /// first bound passed. An empty collection charges nothing and takes no
+    /// level. Outside a budgeted decode it charges nothing.
     #[inline]
-    pub(crate) fn enter(n: usize, each: usize, counted: bool) -> Result<Level> {
+    pub fn enter(n: usize, each: usize, counted: bool) -> Result<Level> {
         if n == 0 {
-            return Ok(Level { taken: false });
+            return Ok(Level {
+                scope: None,
+                _thread: PhantomData,
+            });
         }
-        let taken = charge(|left| {
+        let scope = charge(|left| {
             let n = n as u64;
             if counted {
                 if n > left.elements {
@@ -210,12 +235,16 @@ mod scoped {
             left.depth -= 1;
             None
         })?;
-        Ok(Level { taken })
+        Ok(Level {
+            scope,
+            _thread: PhantomData,
+        })
     }
 
-    /// `bytes` of heap alone, nesting nothing: a string's.
+    /// Charges `bytes` of heap alone, nesting nothing: a string's. Outside a
+    /// budgeted decode it charges nothing.
     #[inline]
-    pub(crate) fn heap(bytes: usize) -> Result<()> {
+    pub fn heap(bytes: usize) -> Result<()> {
         if bytes == 0 {
             return Ok(());
         }
@@ -230,10 +259,10 @@ mod scoped {
         .map(drop)
     }
 
-    /// A collection whose heap no budget bounds, `length` of them: refused
-    /// inside a scope when there are any.
+    /// Refuses `length` collections whose heap no budget bounds inside a
+    /// budgeted decode, when there are any; outside one it allows them.
     #[inline]
-    pub(crate) fn unbudgeted(length: usize) -> Result<()> {
+    pub fn unbudgeted(length: usize) -> Result<()> {
         if length == 0 {
             return Ok(());
         }
@@ -243,9 +272,10 @@ mod scoped {
     impl Drop for Level {
         #[inline]
         fn drop(&mut self) {
-            if self.taken {
+            if let Some(scope) = self.scope {
                 LEFT.with(|l| {
-                    if let Some(mut left) = l.get() {
+                    // A level gives back to the scope it was taken from alone.
+                    if let Some(mut left) = l.get().filter(|left| left.scope == scope) {
                         left.depth += 1;
                         l.set(Some(left));
                     }
@@ -256,26 +286,28 @@ mod scoped {
 }
 
 #[cfg(feature = "std")]
-pub(crate) use scoped::{enter, heap, unbudgeted};
+pub use scoped::{enter, heap, unbudgeted};
 
 /// A collection's elements, unbounded without `std`'s scopes.
 #[cfg(not(feature = "std"))]
 #[inline(always)]
-pub(crate) fn enter(_: usize, _: usize, _: bool) -> Result<Level> {
-    Ok(Level {})
+pub fn enter(_: usize, _: usize, _: bool) -> Result<Level> {
+    Ok(Level {
+        _thread: PhantomData,
+    })
 }
 
 /// A string's bytes, unbounded without `std`'s scopes.
 #[cfg(not(feature = "std"))]
 #[inline(always)]
-pub(crate) fn heap(_: usize) -> Result<()> {
+pub fn heap(_: usize) -> Result<()> {
     Ok(())
 }
 
 /// A collection no budget bounds, allowed without `std`'s scopes.
 #[cfg(not(feature = "std"))]
 #[inline(always)]
-pub(crate) fn unbudgeted(_: usize) -> Result<()> {
+pub fn unbudgeted(_: usize) -> Result<()> {
     Ok(())
 }
 

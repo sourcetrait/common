@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::derive::{Decode, Encode};
 use core::num::NonZeroUsize;
 
@@ -34,14 +34,14 @@ impl<T: Encode> Default for ConvertIntoEncoder<T> {
     }
 }
 
-impl<D, T: Encode + for<'a> ConvertFrom<&'a D>> Encoder<D> for ConvertIntoEncoder<T> {
+unsafe impl<D, T: Encode + for<'a> ConvertFrom<&'a D>> Encoder<D> for ConvertIntoEncoder<T> {
     #[inline(always)]
-    fn encode(&mut self, t: &D) {
+    unsafe fn encode(&mut self, t: &D) {
         self.0.encode(&T::convert_from(t));
     }
 }
 
-impl<T: Encode> Buffer for ConvertIntoEncoder<T> {
+impl<T: Encode> EncoderBuffer for ConvertIntoEncoder<T> {
     fn collect_into(&mut self, out: &mut alloc::vec::Vec<u8>) {
         self.0.collect_into(out);
     }
@@ -66,9 +66,11 @@ impl<'a, T: Decode<'a>> View<'a> for ConvertFromDecoder<'a, T> {
     }
 }
 
-impl<'a, F: ConvertFrom<T>, T: Decode<'a>> Decoder<'a, F> for ConvertFromDecoder<'a, T> {
+unsafe impl<'a, F: ConvertFrom<T>, T: Decode<'a>> Decoder<'a, F> for ConvertFromDecoder<'a, T> {
+    const CACHE_SAFE: bool = <T::Decoder as Decoder<'a, T>>::CACHE_SAFE;
+
     #[inline(always)]
-    fn decode(&mut self) -> F {
+    unsafe fn decode(&mut self) -> F {
         F::convert_from(self.0.decode())
     }
 }

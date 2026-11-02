@@ -36,6 +36,13 @@ type ErrorImpl = ();
 /// In release mode, the error is a zero-sized type for efficiency.
 #[cfg_attr(test, derive(PartialEq))]
 pub struct Error(ErrorImpl);
+impl Error {
+    /// The error a coder's `populate` returns for input that does not decode,
+    /// `reason` kept in a debug build alone.
+    pub fn new(reason: &'static str) -> Self {
+        error(reason)
+    }
+}
 impl Debug for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         #[cfg(debug_assertions)]

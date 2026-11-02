@@ -1,4 +1,4 @@
-use crate::coder::{Buffer, Decoder, Encoder, Result, View};
+use crate::coder::{Decoder, Encoder, EncoderBuffer, Result, View};
 use crate::fast::{CowSlice, NextUnchecked, PushUnchecked, VecImpl};
 use crate::pack::{pack_bytes, unpack_bytes};
 use alloc::vec::Vec;
@@ -10,14 +10,14 @@ pub struct VariantEncoder {
     data: VecImpl<u8>,
 }
 
-impl Encoder<u8> for VariantEncoder {
+unsafe impl Encoder<u8> for VariantEncoder {
     #[inline(always)]
-    fn encode(&mut self, v: &u8) {
+    unsafe fn encode(&mut self, v: &u8) {
         unsafe { self.data.push_unchecked(*v) };
     }
 }
 
-impl Buffer for VariantEncoder {
+impl EncoderBuffer for VariantEncoder {
     fn collect_into(&mut self, out: &mut Vec<u8>) {
         pack_bytes(self.data.as_mut_slice(), out);
         self.data.clear();
@@ -65,8 +65,10 @@ impl<'a> View<'a> for VariantDecoder<'a> {
     }
 }
 
-impl<'a> Decoder<'a, u8> for VariantDecoder<'a> {
-    fn decode(&mut self) -> u8 {
+unsafe impl<'a> Decoder<'a, u8> for VariantDecoder<'a> {
+    const CACHE_SAFE: bool = true;
+
+    unsafe fn decode(&mut self) -> u8 {
         unsafe { self.variants.mut_slice().next_unchecked() }
     }
 }
