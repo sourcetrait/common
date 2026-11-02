@@ -1,174 +1,174 @@
-//! bitcode support for recursive types.
+//! bitcode for recursive types: what `#[cereal::derived]` emits for one, run
+//! by cereal's `bitcoded` module.
 //!
-//! bitcode 0.6's derive generates a coder struct that structurally mirrors the type: one column
-//! coder per field, composed inline. A self-referential type therefore has an infinitely-sized
-//! coder ("reached the recursion limit finding the struct tail"). No attribute changes that; the
-//! coder for the recursive type must itself sit behind a pointer.
+//! bitcode's derive composes a coder from its fields' coders inline, so a
+//! recursive type can't take it: its coder would be infinite in size. The
+//! attribute emits two mirrors of the type's shape instead, which bitcode
+//! derives: an encode mirror whose fields are `Ref`s to the value's, and an
+//! owned decode mirror. The type's `Encode` and `Decode` go through
+//! `LazyEncoder` and `LazyDecoder`, which box the mirror's coder and convert
+//! each value through `EncodeMirror::to_enc` and `DecodeMirror::from_dec`.
 //!
-//! So for recursive types we don't derive on the user's type. Instead:
-//!
-//! 1. Generate two private mirror types with the same shape and let bitcode's *own* derive
-//!    generate their coders:
-//!      - an encode mirror `__CerealBitcodeEnc<T>` whose fields are `Ref<F>`, a lifetime-free
-//!        borrow (`NonNull<F>`) with an `Encode` impl (bitcode has none for `&T`, only `&str`);
-//!      - an owned decode mirror `__CerealBitcodeDec<T>` with the original field types.
-//! 2. Implement `Encode`/`Decode` for the user type with the runtime's `LazyEncoder` /
-//!    `LazyDecoder`, which lazily box the mirror coder (breaking the size cycle) and convert
-//!    through `EncodeMirror::to_enc` / `DecodeMirror::from_dec`.
-//!
-//! Only bitcode's own `#[bitcode(..)]` attributes (`skip`, `bound_type`) travel to the mirrors.
-//! Bounds follow bitcode's policy: `T: Encode` / `T: Decode<'__de>` per type parameter.
-
+//! Each field's `#[bitcode(..)]` attributes go to both mirrors, and each type
+//! parameter is bounded as bitcode's derive bounds it, by `Encode` and by
+//! `Decode<'__de>`.
+use crate::shared::{extend_where, subst_self};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 
-use crate::shared::{extend_where, subst_self};
-
-/// Path of the runtime support module in the `sourcetrait_cereal` crate.
-fn rt() -> TokenStream {
+/// The runtime's module, by the `cereal` path the attribute is named through.
+fn runtime() -> TokenStream {
     quote!(cereal::bitcoded)
 }
 
-/// Field-shape fragments for one struct, or one enum variant.
-struct FieldsGen {
-    /// Encode-mirror declaration: `{ a: Ref<A> }`, `( Ref<A> )`, or nothing.
-    enc_decl: TokenStream,
-    /// Decode-mirror declaration: `{ a: A }`, `( A )`, or nothing.
-    dec_decl: TokenStream,
-    /// Pattern binding every field: `{ a }`, `( __f0 )`, or nothing.
-    pat: TokenStream,
-    /// Encode-mirror constructor from those bindings: `{ a: Ref::new(a) }`, `( Ref::new(__f0) )`, or nothing.
-    enc_build: TokenStream,
-    unit: bool,
-    named: bool,
+/// How a struct or a variant lays out its fields.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Style {
+    Named,
+    Unnamed,
+    Unit,
 }
 
-fn bitcode_attrs(f: &syn::Field) -> Vec<&syn::Attribute> {
-    f.attrs.iter().filter(|a| a.path().is_ident("bitcode")).collect()
+/// A struct's or a variant's fields: a binding, a type, and the bitcode
+/// attributes of each.
+struct Fields<'a> {
+    style: Style,
+    binds: Vec<syn::Ident>,
+    types: Vec<TokenStream>,
+    attrs: Vec<Vec<&'a syn::Attribute>>,
 }
 
-fn gen_fields(fields: &syn::Fields, self_ty: &TokenStream) -> FieldsGen {
-    let rt = rt();
-    match fields {
-        syn::Fields::Named(n) => {
-            let names: Vec<&syn::Ident> = n
-                .named
-                .iter()
-                .map(|f| f.ident.as_ref().expect("named field"))
-                .collect();
-            let attrs: Vec<Vec<&syn::Attribute>> = n.named.iter().map(bitcode_attrs).collect();
-            let tys: Vec<TokenStream> = n
-                .named
-                .iter()
-                .map(|f| subst_self(f.ty.to_token_stream(), self_ty))
-                .collect();
-            FieldsGen {
-                enc_decl: quote!({ #( #(#attrs)* #names: #rt::Ref<#tys> ),* }),
-                dec_decl: quote!({ #( #(#attrs)* #names: #tys ),* }),
-                pat: quote!({ #(#names),* }),
-                enc_build: quote!({ #( #names: #rt::Ref::new(#names) ),* }),
-                unit: false,
-                named: true,
-            }
+impl<'a> Fields<'a> {
+    /// The fields, `Self` in their types naming `self_ty`, an unnamed field
+    /// bound as `__f<index>`.
+    fn new(fields: &'a syn::Fields, self_ty: &TokenStream) -> Self {
+        let style = match fields {
+            syn::Fields::Named(_) => Style::Named,
+            syn::Fields::Unnamed(_) => Style::Unnamed,
+            syn::Fields::Unit => Style::Unit,
+        };
+        let binds = fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| f.ident.clone().unwrap_or_else(|| format_ident!("__f{}", i)))
+            .collect();
+        let types = fields
+            .iter()
+            .map(|f| subst_self(f.ty.to_token_stream(), self_ty))
+            .collect();
+        let attrs = fields
+            .iter()
+            .map(|f| f.attrs.iter().filter(|a| a.path().is_ident("bitcode")).collect())
+            .collect();
+        Self {
+            style,
+            binds,
+            types,
+            attrs,
         }
-        syn::Fields::Unnamed(u) => {
-            let binds: Vec<syn::Ident> = (0..u.unnamed.len())
-                .map(|i| format_ident!("__f{}", i))
-                .collect();
-            let attrs: Vec<Vec<&syn::Attribute>> = u.unnamed.iter().map(bitcode_attrs).collect();
-            let tys: Vec<TokenStream> = u
-                .unnamed
-                .iter()
-                .map(|f| subst_self(f.ty.to_token_stream(), self_ty))
-                .collect();
-            FieldsGen {
-                enc_decl: quote!(( #( #(#attrs)* #rt::Ref<#tys> ),* )),
-                dec_decl: quote!(( #( #(#attrs)* #tys ),* )),
-                pat: quote!(( #(#binds),* )),
-                enc_build: quote!(( #( #rt::Ref::new(#binds) ),* )),
-                unit: false,
-                named: false,
-            }
+    }
+
+    /// The fields declared, each type as `ty` makes it from the field's.
+    fn declare(&self, ty: impl Fn(&TokenStream) -> TokenStream) -> TokenStream {
+        let Self {
+            binds, types, attrs, ..
+        } = self;
+        let types = types.iter().map(ty);
+        match self.style {
+            Style::Named => quote!({ #( #(#attrs)* #binds: #types ),* }),
+            Style::Unnamed => quote!(( #( #(#attrs)* #types ),* )),
+            Style::Unit => quote!(),
         }
-        syn::Fields::Unit => FieldsGen {
-            enc_decl: quote!(),
-            dec_decl: quote!(),
-            pat: quote!(),
-            enc_build: quote!(),
-            unit: true,
-            named: false,
-        },
+    }
+
+    /// The pattern binding each field.
+    fn pattern(&self) -> TokenStream {
+        let binds = &self.binds;
+        match self.style {
+            Style::Named => quote!({ #(#binds),* }),
+            Style::Unnamed => quote!(( #(#binds),* )),
+            Style::Unit => quote!(),
+        }
+    }
+
+    /// The encode mirror's value at `path`, each field a `Ref` to its binding,
+    /// in an unsafe block where there are any: each `Ref` is used while the
+    /// value is, as `to_enc`'s caller promises.
+    fn refs(&self, path: TokenStream, rt: &TokenStream) -> TokenStream {
+        let binds = &self.binds;
+        match self.style {
+            Style::Named if binds.is_empty() => quote!(#path {}),
+            Style::Named => quote!(unsafe { #path { #( #binds: #rt::Ref::new(#binds) ),* } }),
+            Style::Unnamed if binds.is_empty() => quote!(#path()),
+            Style::Unnamed => quote!(unsafe { #path( #( #rt::Ref::new(#binds) ),* ) }),
+            Style::Unit => path,
+        }
     }
 }
 
-/// `impl Encode`/`impl Decode` for a recursive type, plus the mirrors they route through.
+/// `Encode` and `Decode` for a recursive type, with the mirrors they go
+/// through.
 pub(crate) fn make_recursive_impls(item: &syn::DeriveInput) -> syn::Result<TokenStream> {
-    let rt = rt();
+    let rt = runtime();
     let target = &item.ident;
     let generics = &item.generics;
     let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
     let self_ty = quote!(#target #type_generics);
+    let enc = format_ident!("__CerealBitcodeEnc{}", target);
+    let dec = format_ident!("__CerealBitcodeDec{}", target);
 
-    let enc_ident = format_ident!("__CerealBitcodeEnc{}", target);
-    let dec_ident = format_ident!("__CerealBitcodeDec{}", target);
-
-    // The encode mirror has the SAME generics as the user type: `Ref<F>` is lifetime-free
-    // (it holds a `NonNull<F>`), so there is no borrow lifetime to thread through.
-
-    // Decode impls: user generics plus bitcode's `'__de`.
+    // The mirrors take the type's own generics: a `Ref` has no lifetime to
+    // thread through. Decoding adds bitcode's `'__de`, outliving the type's.
     let mut de_generics = generics.clone();
     de_generics.params.insert(0, syn::parse_quote!('__de));
     let (de_impl_generics, _, _) = de_generics.split_for_impl();
-
-    // Bounds, same policy as bitcode's derive: per type parameter, not per field type.
-    let type_params: Vec<&syn::Ident> = generics.type_params().map(|p| &p.ident).collect();
-    let lifetimes: Vec<&syn::Lifetime> = generics.lifetimes().map(|l| &l.lifetime).collect();
+    let params: Vec<&syn::Ident> = generics.type_params().map(|p| &p.ident).collect();
     let enc_where = extend_where(
         where_clause,
-        type_params
+        params
             .iter()
             .map(|p| -> syn::WherePredicate { syn::parse_quote!(#p: ::bitcode::Encode) }),
     );
     let dec_where = extend_where(
         where_clause,
-        type_params
+        params
             .iter()
             .map(|p| -> syn::WherePredicate { syn::parse_quote!(#p: ::bitcode::Decode<'__de>) })
-            .chain(
-                lifetimes
-                    .iter()
-                    .map(|l| -> syn::WherePredicate { syn::parse_quote!('__de: #l) }),
-            ),
+            .chain(generics.lifetimes().map(|l| -> syn::WherePredicate {
+                let l = &l.lifetime;
+                syn::parse_quote!('__de: #l)
+            })),
     );
 
-    let (enc_item, dec_item, to_enc_body, from_dec_body) = match &item.data {
+    let (enc_item, dec_item, to_enc, from_dec) = match &item.data {
         syn::Data::Struct(s) => {
-            let FieldsGen { enc_decl, dec_decl, pat, enc_build, unit, named } =
-                gen_fields(&s.fields, &self_ty);
-            // Named structs put the where-clause before the braces; tuple/unit after, then `;`.
-            let (enc_item, dec_item) = if named {
+            let fields = Fields::new(&s.fields, &self_ty);
+            let enc_fields = fields.declare(|ty| quote!(#rt::Ref<#ty>));
+            let dec_fields = fields.declare(TokenStream::clone);
+            // A braced struct takes its where-clause before its fields, a tuple
+            // or unit struct after them and then a `;`.
+            let (enc_item, dec_item) = if fields.style == Style::Named {
                 (
-                    quote!(pub struct #enc_ident #impl_generics #where_clause #enc_decl),
-                    quote!(pub struct #dec_ident #impl_generics #where_clause #dec_decl),
+                    quote!(pub struct #enc #impl_generics #where_clause #enc_fields),
+                    quote!(pub struct #dec #impl_generics #where_clause #dec_fields),
                 )
             } else {
                 (
-                    quote!(pub struct #enc_ident #impl_generics #enc_decl #where_clause;),
-                    quote!(pub struct #dec_ident #impl_generics #dec_decl #where_clause;),
+                    quote!(pub struct #enc #impl_generics #enc_fields #where_clause;),
+                    quote!(pub struct #dec #impl_generics #dec_fields #where_clause;),
                 )
             };
-            let to_enc = if unit {
-                quote!(#enc_ident)
-            } else {
-                // `self: &Self` — match ergonomics bind every field as `&F`.
-                quote!({ let #target #pat = self; unsafe { #enc_ident #enc_build } })
-            };
-            let from_dec = if unit {
-                quote!({ let _ = m; #target })
-            } else {
-                // by-value move out of the owned mirror
-                quote!({ let #dec_ident #pat = m; #target #pat })
-            };
+            let pattern = fields.pattern();
+            let refs = fields.refs(quote!(#enc), &rt);
+            // Matching `self`, a reference, binds each field by reference.
+            let to_enc = quote!({
+                let #target #pattern = self;
+                #refs
+            });
+            let from_dec = quote!({
+                let #dec #pattern = dec;
+                #target #pattern
+            });
             (enc_item, dec_item, to_enc, from_dec)
         }
         syn::Data::Enum(e) => {
@@ -177,22 +177,27 @@ pub(crate) fn make_recursive_impls(item: &syn::DeriveInput) -> syn::Result<Token
             let mut to_arms = Vec::new();
             let mut from_arms = Vec::new();
             for v in &e.variants {
-                let vi = &v.ident;
-                let FieldsGen { enc_decl, dec_decl, pat, enc_build, .. } =
-                    gen_fields(&v.fields, &self_ty);
-                enc_variants.push(quote!(#vi #enc_decl));
-                dec_variants.push(quote!(#vi #dec_decl));
-                to_arms.push(quote!(#target::#vi #pat => unsafe { #enc_ident::#vi #enc_build }));
-                from_arms.push(quote!(#dec_ident::#vi #pat => #target::#vi #pat));
+                let name = &v.ident;
+                let fields = Fields::new(&v.fields, &self_ty);
+                let enc_fields = fields.declare(|ty| quote!(#rt::Ref<#ty>));
+                let dec_fields = fields.declare(TokenStream::clone);
+                let pattern = fields.pattern();
+                let refs = fields.refs(quote!(#enc::#name), &rt);
+                enc_variants.push(quote!(#name #enc_fields));
+                dec_variants.push(quote!(#name #dec_fields));
+                to_arms.push(quote!(#target::#name #pattern => #refs));
+                from_arms.push(quote!(#dec::#name #pattern => #target::#name #pattern));
             }
-            let enc_item = quote!(pub enum #enc_ident #impl_generics #where_clause { #(#enc_variants),* });
-            let dec_item = quote!(pub enum #dec_ident #impl_generics #where_clause { #(#dec_variants),* });
+            let enc_item =
+                quote!(pub enum #enc #impl_generics #where_clause { #(#enc_variants),* });
+            let dec_item =
+                quote!(pub enum #dec #impl_generics #where_clause { #(#dec_variants),* });
             let (to_enc, from_dec) = if e.variants.is_empty() {
-                (quote!(match *self {}), quote!(match m {}))
+                (quote!(match *self {}), quote!(match dec {}))
             } else {
                 (
                     quote!(match self { #(#to_arms),* }),
-                    quote!(match m { #(#from_arms),* }),
+                    quote!(match dec { #(#from_arms),* }),
                 )
             };
             (enc_item, dec_item, to_enc, from_dec)
@@ -209,30 +214,37 @@ pub(crate) fn make_recursive_impls(item: &syn::DeriveInput) -> syn::Result<Token
         #[allow(non_camel_case_types, dead_code, clippy::all)]
         const _: () = {
             #[derive(::bitcode::Encode)]
-            #[allow(non_camel_case_types, dead_code)]
             #enc_item
 
-            // Manual, so no `T: Copy` bound is inferred: every field is a `Ref`, which is Copy.
-            impl #impl_generics ::core::clone::Clone for #enc_ident #type_generics #where_clause {
+            // By hand, so no `Copy` bound falls on the type's parameters: every
+            // field is a `Ref`, itself `Copy`.
+            impl #impl_generics ::core::clone::Clone for #enc #type_generics #where_clause {
                 #[inline(always)]
-                fn clone(&self) -> Self { *self }
+                fn clone(&self) -> Self {
+                    *self
+                }
             }
-            impl #impl_generics ::core::marker::Copy for #enc_ident #type_generics #where_clause {}
+            impl #impl_generics ::core::marker::Copy for #enc #type_generics #where_clause {}
 
             #[derive(::bitcode::Decode)]
-            #[allow(non_camel_case_types, dead_code)]
             #dec_item
 
             impl #impl_generics #rt::EncodeMirror for #self_ty #enc_where {
-                type Enc = #enc_ident #type_generics;
+                type Enc = #enc #type_generics;
+
                 #[inline(always)]
-                fn to_enc(&self) -> Self::Enc { #to_enc_body }
+                unsafe fn to_enc(&self) -> Self::Enc {
+                    #to_enc
+                }
             }
 
             impl #de_impl_generics #rt::DecodeMirror<'__de> for #self_ty #dec_where {
-                type Dec = #dec_ident #type_generics;
+                type Dec = #dec #type_generics;
+
                 #[inline(always)]
-                fn from_dec(m: Self::Dec) -> Self { #from_dec_body }
+                fn from_dec(dec: Self::Dec) -> Self {
+                    #from_dec
+                }
             }
 
             impl #impl_generics ::bitcode::Encode for #self_ty #enc_where {
